@@ -125,20 +125,25 @@ mod tests {
         let duration = Instant::now() - start_time;
 
         assert_eq!(app.game.num_ticks, NUM_TICKS);
-        assert_eq!(app.game.num_renders, NUM_TICKS * 60 / TICK_RATE as u64);
+        assert!(
+            app.game.num_renders >= NUM_TICKS,
+            "left: {}, right: {}",
+            app.game.num_renders,
+            NUM_TICKS
+        );
 
         const NUM_MILLIS: u64 = (NUM_TICKS - 1) * 1000 / TICK_RATE as u64;
         const TARGET_DURATION: Duration = Duration::from_millis(NUM_MILLIS);
         if duration > TARGET_DURATION {
             assert!(
-                duration - TARGET_DURATION < Duration::from_millis(2),
+                duration - TARGET_DURATION < Duration::from_millis(4),
                 "left: {:?}, right: {:?}",
                 duration,
                 TARGET_DURATION
             );
         } else {
             assert!(
-                TARGET_DURATION - duration < Duration::from_millis(2),
+                TARGET_DURATION - duration < Duration::from_millis(4),
                 "left: {:?}, right: {:?}",
                 duration,
                 TARGET_DURATION
