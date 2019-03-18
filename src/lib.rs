@@ -68,6 +68,11 @@ impl<G: Game> Application<G> {
             if self.game.finished() {
                 break;
             }
+            let now = Instant::now();
+            let next_loop_time = next_tick_time.min(next_render_time);
+            if now < next_loop_time {
+                std::thread::sleep(next_loop_time - now);
+            }
         }
     }
 }
