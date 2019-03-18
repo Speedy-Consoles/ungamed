@@ -1,0 +1,8 @@
+[package]
+name = "ungamed"
+version = "0.1.0"
+authors = ["Speedy Consoles <rubihome@gmx.de>"]
+edition = "2018"
+
+[dependencies]
+glium = "0.23.0"
