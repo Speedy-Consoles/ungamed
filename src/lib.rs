@@ -3,12 +3,15 @@ extern crate glium;
 use std::time::Instant;
 use std::time::Duration;
 
+use glium::glutin::dpi::LogicalSize;
 use glium::glutin::Event;
 use glium::Frame;
 use glium::Display;
 use glium::glutin::EventsLoop;
 
 pub trait Game {
+    fn title() -> &'static str;
+    fn initial_window_size() -> LogicalSize;
     fn new() -> Self;
     fn handle_event(&mut self, event: Event);
     fn tick(&mut self);
@@ -26,8 +29,8 @@ impl<G: Game> Application<G> {
     pub fn new() -> Self {
         let events_loop = glium::glutin::EventsLoop::new();
         let window = glium::glutin::WindowBuilder::new()
-            .with_dimensions(glium::glutin::dpi::LogicalSize::new(1920.0, 1080.0))
-            .with_title("Hello world");
+            .with_dimensions(G::initial_window_size())
+            .with_title(G::title());
         let context = glium::glutin::ContextBuilder::new();
         let display = glium::Display::new(window, context, &events_loop).unwrap();
         Self {
@@ -85,6 +88,7 @@ mod tests {
 
     use crate::Game;
     use crate::Application;
+    use crate::LogicalSize;
     use crate::Event;
     use crate::Frame;
 
@@ -97,6 +101,14 @@ mod tests {
     }
 
     impl Game for TestGame {
+        fn title() -> &'static str {
+            "Test Game"
+        }
+
+        fn initial_window_size() -> LogicalSize {
+            LogicalSize::new(50.0, 50.0)
+        }
+
         fn new() -> Self {
             TestGame {
                 num_ticks: 0,
