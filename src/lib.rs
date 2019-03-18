@@ -4,6 +4,7 @@ use std::time::Instant;
 use std::time::Duration;
 
 use glium::glutin::Event;
+use glium::Frame;
 use glium::Display;
 use glium::glutin::EventsLoop;
 
@@ -11,7 +12,7 @@ pub trait Game {
     fn new() -> Self;
     fn handle_event(&mut self, event: Event);
     fn tick(&mut self);
-    fn render(&mut self);
+    fn render(&mut self, frame: &mut Frame);
     fn finished(&self) -> bool;
 }
 
@@ -49,12 +50,16 @@ impl<G: Game> Application<G> {
         loop {
             let now = Instant::now();
             if now >= next_tick_time {
+                let game = &mut self.game;
+                self.events_loop.poll_events(|event| game.handle_event(event));
                 self.game.tick();
                 num_ticks += 1;
                 next_tick_time = start_time + Duration::from_secs(num_ticks) / tick_rate;
             }
             if now >= next_render_time {
-                self.game.render();
+                let mut frame = self.display.draw();
+                self.game.render(&mut frame);
+                frame.finish().unwrap(); // TODO maybe not unwrap?
                 num_renders += 1;
                 // TODO adapt render_phase and render_rate
                 next_render_time = start_time + render_phase
@@ -76,8 +81,9 @@ mod tests {
     use crate::Game;
     use crate::Application;
     use crate::Event;
+    use crate::Frame;
 
-    const NUM_TICKS: u64 = 181;
+    const NUM_TICKS: u64 = 81;
     const TICK_RATE: u32 = 50;
 
     struct TestGame {
@@ -93,13 +99,15 @@ mod tests {
             }
         }
 
-        fn handle_event(&mut self, _event: Event) {}
+        fn handle_event(&mut self, event: Event) {
+            eprintln!("{:?}", event);
+        }
 
         fn tick(&mut self) {
             self.num_ticks += 1;
         }
 
-        fn render(&mut self) {
+        fn render(&mut self, _frame: &mut Frame) {
             self.num_renders += 1;
         }
 
