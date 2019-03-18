@@ -1,7 +1,9 @@
-extern crate glium;
+// TODO should i use pub here?
+pub extern crate glium;
 
 use std::time::Instant;
 use std::time::Duration;
+
 
 use glium::glutin::dpi::LogicalSize;
 use glium::glutin::Event;
@@ -12,7 +14,7 @@ use glium::glutin::EventsLoop;
 pub trait Game {
     fn title() -> &'static str;
     fn initial_window_size() -> LogicalSize;
-    fn new() -> Self;
+    fn new(display: &Display) -> Self;
     fn handle_event(&mut self, event: Event);
     fn tick(&mut self);
     fn render(&mut self, frame: &mut Frame);
@@ -34,7 +36,7 @@ impl<G: Game> Application<G> {
         let context = glium::glutin::ContextBuilder::new();
         let display = glium::Display::new(window, context, &events_loop).unwrap();
         Self {
-            game: G::new(),
+            game: G::new(&display),
             display,
             events_loop,
         }
@@ -90,6 +92,7 @@ mod tests {
     use crate::Application;
     use crate::LogicalSize;
     use crate::Event;
+    use crate::Display;
     use crate::Frame;
 
     const NUM_TICKS: u64 = 81;
@@ -109,7 +112,7 @@ mod tests {
             LogicalSize::new(50.0, 50.0)
         }
 
-        fn new() -> Self {
+        fn new(_display: &Display) -> Self {
             TestGame {
                 num_ticks: 0,
                 num_renders: 0,
