@@ -7,3 +7,8 @@ edition = "2018"
 [dependencies]
 glium = "0.23.0"
 cgmath = "0.17.0"
+controls = { path = "../controls" }
+
+[dev-dependencies]
+strum = "0.14.0"
+strum_macros = "0.14.0"

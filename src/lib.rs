@@ -1,19 +1,27 @@
 mod graphics;
 
-extern crate glium;
-pub extern crate cgmath;
-
 use std::time::Instant;
 use std::time::Duration;
+use std::hash::Hash;
+use std::str::FromStr;
 
-use glium::glutin::Event;
+use glium::glutin::Event as WinitEvent;
 use glium::glutin::EventsLoop;
 use glium::glutin::WindowEvent;
-use glium::glutin::dpi::LogicalSize;
 
+use controls::Controls;
 use self::graphics::Graphics;
 
-pub use glium::glutin; // TODO can we eliminate this re-export?
+pub use controls::ControlBind;
+pub use controls::ControlEvent;
+pub use controls::FireTrigger;
+pub use controls::HoldableTrigger;
+pub use controls::ValueTrigger;
+pub use controls::ValueTargetTrait;
+pub use controls::VirtualKeyCode;
+
+pub use cgmath;
+pub use glium::glutin::dpi::LogicalSize;
 pub use self::graphics::SceneObject;
 pub use self::graphics::create::SceneObjectCreator;
 pub use self::graphics::render::SceneSettings;
@@ -22,11 +30,26 @@ pub use self::graphics::render::SceneObjectRenderer;
 pub use self::graphics::render::Projection;
 pub use self::graphics::render::Camera;
 
+#[derive(Debug)]
+pub enum Event<FireTarget, SwitchTarget, ValueTarget> {
+    ControlEvent(ControlEvent<FireTarget, SwitchTarget, ValueTarget>),
+    CloseRequested,
+}
+
 pub trait Game {
+    type FireTarget: Copy + Eq + Hash + FromStr + ToString;
+    type SwitchTarget: Copy + Eq + Hash + FromStr + ToString;
+    type ValueTarget: ValueTargetTrait + Copy + Eq + Hash + FromStr + ToString;
     fn title() -> &'static str;
     fn optimal_window_size() -> LogicalSize;
-    fn new(scene_object_creator: SceneObjectCreator) -> Self;
-    fn handle_event(&mut self, event: Event);
+    fn new(
+        scene_object_creator: SceneObjectCreator,
+        binds: &mut Vec<ControlBind<Self::FireTarget, Self::SwitchTarget, Self::ValueTarget>>
+    ) -> Self;
+    fn handle_event(
+        &mut self,
+        event: Event<Self::FireTarget, Self::SwitchTarget, Self::ValueTarget>
+    );
     fn tick(&mut self);
     fn render(&self, renderer: SceneRenderer);
     fn finished(&self) -> bool;
@@ -36,6 +59,7 @@ pub struct Application<G: Game> {
     game: G,
     graphics: Graphics,
     events_loop: EventsLoop,
+    controls: Controls<G::FireTarget, G::SwitchTarget, G::ValueTarget>
 }
 
 impl<G: Game> Application<G> {
@@ -46,11 +70,16 @@ impl<G: Game> Application<G> {
             .with_title(G::title());
         let context = glium::glutin::ContextBuilder::new();
         let display = glium::Display::new(window, context, &events_loop).unwrap();
-        let mut scene = Graphics::new(display, G::optimal_window_size());
+        let mut binds = Vec::new();
+        let mut graphics = Graphics::new(display, G::optimal_window_size());
+        let game = G::new(graphics.object_creator(), &mut binds);
+        let mut controls = Controls::new();
+        binds.into_iter().for_each(|bind| controls.add_bind(bind));
         Self {
-            game: G::new(scene.object_creator()),
-            graphics: scene,
+            game,
+            graphics,
             events_loop,
+            controls,
         }
     }
 
@@ -66,15 +95,20 @@ impl<G: Game> Application<G> {
 
         loop {
             let game = &mut self.game;
-            let scene = &mut self.graphics;
+            let graphics = &mut self.graphics;
+            let controls = &mut self.controls;
             self.events_loop.poll_events(|event| {
                 match event {
-                    Event::WindowEvent { event: WindowEvent::Resized(size), .. } => {
-                        scene.set_view_port_size(size);
+                    WinitEvent::WindowEvent { event: WindowEvent::Resized(size), .. } => {
+                        graphics.set_view_port_size(size);
                     },
+                    WinitEvent::WindowEvent { event: WindowEvent::CloseRequested, .. } => {
+                        game.handle_event(Event::CloseRequested);
+                    }
+                    WinitEvent::DeviceEvent { event, device_id } => controls.process(device_id, event),
                     _ => (),
                 }
-                game.handle_event(event);
+                controls.get_events().for_each(|e| game.handle_event(Event::ControlEvent(e)));
             });
 
             if Instant::now() >= next_tick_time {
@@ -108,19 +142,51 @@ mod tests {
     use std::time::Duration;
     use std::cell::Cell;
 
-    use crate::Game;
+    use strum_macros::EnumString;
+    use strum_macros::ToString;
+
     use crate::Application;
-    use crate::LogicalSize;
+    use crate::ControlBind;
+    use crate::Game;
     use crate::Event;
+    use crate::LogicalSize;
     use crate::SceneObjectCreator;
     use crate::SceneRenderer;
     use crate::SceneObject;
     use crate::cgmath::Vector3;
     use crate::cgmath::Matrix4;
     use crate::cgmath::Rad;
+    use crate::ValueTargetTrait;
 
     const NUM_TICKS: u64 = 81;
     const TICK_RATE: u32 = 50;
+
+    #[derive(Copy, Clone, Debug, PartialEq, Eq, Hash, ToString, EnumString)]
+    enum FireTarget {
+        LMBFire,
+        MWUpFire,
+        MWDownFire,
+        GHFire,
+    }
+
+    #[derive(Copy, Clone, Debug, PartialEq, Eq, Hash, ToString, EnumString)]
+    enum SwitchTarget {
+        RMBSwitch,
+        GHSwitch,
+        Key0Switch,
+        AMMBSwitch,
+    }
+
+    #[derive(Copy, Clone, Debug, PartialEq, Eq, Hash, ToString, EnumString)]
+    enum ValueTarget {
+        MouseX,
+    }
+
+    impl ValueTargetTrait for ValueTarget {
+        fn base_factor(&self) -> f64 {
+            1.0
+        }
+    }
 
     struct TestGame {
         cube: SceneObject,
@@ -130,6 +196,10 @@ mod tests {
     }
 
     impl Game for TestGame {
+        type FireTarget = FireTarget;
+        type SwitchTarget = SwitchTarget;
+        type ValueTarget = ValueTarget;
+
         fn title() -> &'static str {
             "Test Game"
         }
@@ -138,7 +208,10 @@ mod tests {
             LogicalSize::new(50.0, 50.0)
         }
 
-        fn new(mut scene_object_creator: SceneObjectCreator) -> Self {
+        fn new(
+            mut scene_object_creator: SceneObjectCreator,
+            _binds: &mut Vec<ControlBind<FireTarget, SwitchTarget, ValueTarget>>,
+        ) -> Self {
             let vertices = [
                 Vector3::new(-0.5,  0.5, -0.5),
                 Vector3::new(-0.5, -0.5, -0.5),
@@ -166,7 +239,7 @@ mod tests {
             }
         }
 
-        fn handle_event(&mut self, event: Event) {
+        fn handle_event(&mut self, event: Event<FireTarget, SwitchTarget, ValueTarget>) {
             eprintln!("{:?}", event);
         }
 
