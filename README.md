@@ -1,2 +1,2 @@
-# Rusty 3D Game
+# Ungamed
 A single player game engine Rust.
