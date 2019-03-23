@@ -6,6 +6,7 @@ edition = "2018"
 
 [dependencies]
 glium = "0.23.0"
+glium_text = "0.14.0"
 cgmath = "0.17.0"
 controls = { path = "../controls" }
 

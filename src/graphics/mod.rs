@@ -8,12 +8,18 @@ use glium::Depth;
 use glium::glutin::dpi::LogicalSize;
 use glium::implement_vertex;
 
+use glium_text::TextSystem;
+use glium_text::TextDisplay;
+use glium_text::FontTexture;
+
 use self::create::SceneObjectCreator;
 use self::render::SceneRenderer;
 
 const VERTEX_SHADER_SOURCE: &'static str = include_str!("../../shader_src/vertex_shader.vert");
 const FRAGMENT_SHADER_SOURCE: &'static str = include_str!("../../shader_src/fragment_shader.frag");
 const GEOMETRY_SHADER_SOURCE: &'static str = include_str!("../../shader_src/geometry_shader.geo");
+
+const TEXT_FONT_SIZE: u32 = 20;
 
 #[derive(Copy, Clone)]
 struct Vertex {
@@ -33,6 +39,8 @@ pub struct Graphics {
     draw_parameters: DrawParameters<'static>,
     screen_ratio: f64,
     optimal_screen_ratio: f64,
+    text_system: TextSystem,
+    text_display: TextDisplay<Box<FontTexture>>,
 }
 
 impl Graphics {
@@ -61,6 +69,12 @@ impl Graphics {
             optimal_screen_ratio = optimal_window_size.width / optimal_window_size.height;
         }
 
+        // load font and create text system
+        let font_file = include_bytes!("../../font/DejaVuSansMono.ttf");
+        let font = FontTexture::new(&display, font_file.as_ref(), TEXT_FONT_SIZE).unwrap();
+        let text_system = TextSystem::new(&display);
+        let text_display = TextDisplay::new(&text_system, Box::new(font), "");
+
         // create the graphics
         Graphics {
             display,
@@ -68,10 +82,12 @@ impl Graphics {
             draw_parameters,
             screen_ratio: optimal_screen_ratio, // TODO this is ugly
             optimal_screen_ratio,
+            text_system,
+            text_display,
         }
     }
 
-    pub fn render<G: super::Game>(&self, game: &G) {
+    pub fn render<G: super::Game>(&mut self, game: &G) {
         // create new frame
         let mut frame = self.display.draw();
 
@@ -82,6 +98,8 @@ impl Graphics {
             &self.draw_parameters,
             self.screen_ratio,
             self.optimal_screen_ratio,
+            &self.text_system,
+            &mut self.text_display,
         );
 
         // let the game render the scene via the renderer

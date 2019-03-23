@@ -30,6 +30,7 @@ pub use self::graphics::render::SceneRenderer;
 pub use self::graphics::render::SceneObjectRenderer;
 pub use self::graphics::render::Projection;
 pub use self::graphics::render::Camera;
+pub use self::graphics::render::TEXT_NUM_LINES;
 
 #[derive(Debug)]
 pub enum Event<FireTarget, SwitchTarget, ValueTarget> {
@@ -158,8 +159,9 @@ mod tests {
     use crate::cgmath::Matrix4;
     use crate::cgmath::Rad;
     use crate::ValueTargetTrait;
+    use crate::TEXT_NUM_LINES;
 
-    const NUM_TICKS: u64 = 81;
+    const NUM_TICKS: u64 = 131;
     const TICK_RATE: u32 = 50;
 
     #[derive(Copy, Clone, Debug, PartialEq, Eq, Hash, ToString, EnumString)]
@@ -250,7 +252,7 @@ mod tests {
         }
 
         fn render(&self, renderer: SceneRenderer) {
-            let mut renderer = renderer.set_scene_settings(&Default::default());
+            let mut renderer = renderer.start_object_rendering(&Default::default());
             renderer.draw(&self.cube, &Matrix4::from_angle_z(Rad (self.cube_rotation)));
             let x_cube = Matrix4::from_translation(Vector3::unit_x()) * Matrix4::from_scale(0.05);
             let z_cube = Matrix4::from_translation(Vector3::unit_y()) * Matrix4::from_scale(0.2);
@@ -258,6 +260,10 @@ mod tests {
             renderer.draw(&self.cube, &x_cube);
             renderer.draw(&self.cube, &y_cube);
             renderer.draw(&self.cube, &z_cube);
+            let mut renderer = renderer.start_text_rendering();
+            for i in 0..TEXT_NUM_LINES {
+                renderer.draw_text(i, &format!("line {}", i));
+            }
             self.num_renders.set(self.num_renders.get() + 1);
         }
 
@@ -284,20 +290,16 @@ mod tests {
 
         const NUM_MILLIS: u64 = (NUM_TICKS - 1) * 1000 / TICK_RATE as u64;
         const TARGET_DURATION: Duration = Duration::from_millis(NUM_MILLIS);
-        if duration > TARGET_DURATION {
-            assert!(
-                duration - TARGET_DURATION < Duration::from_millis(10),
-                "left: {:?}, right: {:?}",
-                duration,
-                TARGET_DURATION
-            );
+        let diff = if duration > TARGET_DURATION {
+            duration - TARGET_DURATION
         } else {
-            assert!(
-                TARGET_DURATION - duration < Duration::from_millis(10),
-                "left: {:?}, right: {:?}",
-                duration,
-                TARGET_DURATION
-            );
-        }
+            TARGET_DURATION - duration
+        };
+        assert!(
+            diff < Duration::from_millis(20),
+            "run duration differs: {:?} != {:?}",
+            duration,
+            TARGET_DURATION
+        );
     }
 }
