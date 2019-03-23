@@ -14,6 +14,7 @@ use self::graphics::Graphics;
 
 pub use controls::ControlBind;
 pub use controls::ControlEvent;
+pub use controls::SwitchState;
 pub use controls::FireTrigger;
 pub use controls::HoldableTrigger;
 pub use controls::ValueTrigger;
