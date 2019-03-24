@@ -1,5 +1,6 @@
 pub mod render;
 pub mod create;
+pub mod color;
 
 use glium::Display;
 use glium::DrawParameters;
@@ -27,34 +28,6 @@ struct Vertex {
 }
 
 implement_vertex!(Vertex, position);
-
-#[derive(Debug, Clone, Copy)]
-pub struct Color {
-    pub r: f32,
-    pub g: f32,
-    pub b: f32,
-}
-
-impl Color {
-    pub const fn new(r: f32, g: f32, b: f32) -> Self {
-        Color { r, g, b }
-    }
-
-    pub const fn white()   -> Color { Color { r: 1.0, g: 1.0, b: 1.0 } }
-    pub const fn black()   -> Color { Color { r: 0.0, g: 0.0, b: 0.0 } }
-    pub const fn red()     -> Color { Color { r: 1.0, g: 0.0, b: 0.0 } }
-    pub const fn green()   -> Color { Color { r: 0.0, g: 1.0, b: 0.0 } }
-    pub const fn blue()    -> Color { Color { r: 0.0, g: 0.0, b: 1.0 } }
-    pub const fn cyan()    -> Color { Color { r: 0.0, g: 1.0, b: 1.0 } }
-    pub const fn magenta() -> Color { Color { r: 1.0, g: 0.0, b: 1.0 } }
-    pub const fn yellow()  -> Color { Color { r: 1.0, g: 1.0, b: 0.0 } }
-}
-
-impl Into<[f32; 3]> for Color {
-    fn into(self) -> [f32; 3] {
-        [self.r, self.g, self.b]
-    }
-}
 
 pub struct SceneObject {
     vertex_buffer: glium::VertexBuffer<Vertex>,

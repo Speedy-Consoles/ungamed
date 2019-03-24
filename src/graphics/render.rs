@@ -16,7 +16,7 @@ use cgmath::Matrix4;
 use cgmath::Vector3;
 use cgmath::Rad;
 
-use super::Color;
+use super::color::Color;
 use super::SceneObject;
 
 pub const TEXT_NUM_LINES: u64 = 50; // Number of text lines that cover the whole vertical on the screen

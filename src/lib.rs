@@ -23,7 +23,7 @@ pub use controls::VirtualKeyCode;
 
 pub use cgmath;
 pub use glium::glutin::dpi::LogicalSize;
-pub use self::graphics::Color;
+pub use self::graphics::color::Color;
 pub use self::graphics::SceneObject;
 pub use self::graphics::create::SceneObjectCreator;
 pub use self::graphics::render::SceneSettings;
