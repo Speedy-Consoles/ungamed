@@ -16,6 +16,7 @@ use cgmath::Matrix4;
 use cgmath::Vector3;
 use cgmath::Rad;
 
+use super::Color;
 use super::SceneObject;
 
 pub const TEXT_NUM_LINES: u64 = 50; // Number of text lines that cover the whole vertical on the screen
@@ -99,17 +100,17 @@ impl Camera {
 // TODO make colors own type (maybe use another crate?)
 #[derive(Clone)]
 pub struct SceneSettings {
-    pub background_color: Vector3<f32>,
+    pub background_color: Color,
     pub camera: Camera,
-    pub ambient_light_color: Vector3<f32>,
+    pub ambient_light_color: Color,
     pub directional_light_dir: Vector3<f32>,
-    pub directional_light_color: Vector3<f32>,
+    pub directional_light_color: Color,
 }
 
 impl Default for SceneSettings {
     fn default() -> Self {
         SceneSettings {
-            background_color: Vector3::new(1.0, 0.5, 1.0),
+            background_color: Color::new(1.0, 0.5, 1.0),
             camera: Camera {
                 projection: Projection::Central {
                     y_fov: (PI / 3.0) as f32,
@@ -120,9 +121,9 @@ impl Default for SceneSettings {
                     * Matrix4::from_angle_z(Rad(-(PI * 0.25) as f32))
                     * Matrix4::from_translation(-Vector3::new(1.0, -1.0, 5.0)),
             },
-            ambient_light_color: Vector3::new(0.5, 0.5, 0.5),
+            ambient_light_color: Color::new(0.5, 0.5, 0.5),
             directional_light_dir: Vector3::new(-0.2, -0.4, -1.0),
-            directional_light_color: Vector3::new(0.8, 0.6, 0.7),
+            directional_light_color: Color::new(0.8, 0.6, 0.7),
         }
     }
 }
@@ -161,9 +162,9 @@ impl<'a> SceneRenderer<'a> {
     pub fn start_object_rendering(self, settings: &SceneSettings) -> SceneObjectRenderer<'a> {
         // clear frame with color from scene settings
         self.frame.clear_color(
-            settings.background_color.x,
-            settings.background_color.y,
-            settings.background_color.z,
+            settings.background_color.r,
+            settings.background_color.g,
+            settings.background_color.b,
             1.0
         );
         self.frame.clear_depth(1.0);
@@ -195,27 +196,34 @@ pub struct SceneObjectRenderer<'a> {
     screen_ratio: f64,
     optimal_screen_ratio: f64,
     world_to_screen_matrix: Matrix4<f32>,
-    ambient_light_color: Vector3<f32>,
+    ambient_light_color: Color,
     directional_light_dir: Vector3<f32>,
-    directional_light_color: Vector3<f32>,
+    directional_light_color: Color,
     text_system: &'a TextSystem,
     text_display: &'a mut TextDisplay<Box<FontTexture>>,
 }
 
 impl<'a> SceneObjectRenderer<'a> {
-    pub fn draw(&mut self, object: &SceneObject, object_to_world_matrix: &Matrix4<f32>) {
+    pub fn draw(
+        &mut self,
+        object: &SceneObject,
+        color: Color,
+        object_to_world_matrix: &Matrix4<f32>
+    ) {
         let object_to_world_matrix_uniform: [[f32; 4]; 4] = (*object_to_world_matrix).into();
         // TODO The following uniforms only change per frame, not per draw. Can we optimize this?
         let world_to_screen_matrix_uniform: [[f32; 4]; 4] = self.world_to_screen_matrix.into();
         let ambient_light_color_uniform: [f32; 3] = self.ambient_light_color.into();
         let directional_light_dir_uniform: [f32; 3] = self.directional_light_dir.into();
         let directional_light_color_uniform: [f32; 3] = self.directional_light_color.into();
+        let color_uniform: [f32; 3] = color.into();
         let uniforms = uniform! {
             object_to_world_matrix:      object_to_world_matrix_uniform,
             world_to_screen_matrix:      world_to_screen_matrix_uniform,
             ambient_light_color:         ambient_light_color_uniform,
             directional_light_dir:       directional_light_dir_uniform,
             directional_light_color:     directional_light_color_uniform,
+            color:                       color_uniform,
         };
 
         self.frame.draw(

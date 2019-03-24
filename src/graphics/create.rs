@@ -19,7 +19,7 @@ impl<'a> SceneObjectCreator<'a> {
         }
     }
 
-    pub fn create(&mut self, vertices: &[Vector3<f32>], indices: &[u32]) -> SceneObject {
+    pub fn create(&mut self, vertices: &[Vector3<f32>], indices: &[u32],) -> SceneObject {
         self.buffer.clear();
         self.buffer.extend(vertices.iter().map(|v| Vertex { position: (*v).into() }));
 

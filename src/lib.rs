@@ -23,6 +23,7 @@ pub use controls::VirtualKeyCode;
 
 pub use cgmath;
 pub use glium::glutin::dpi::LogicalSize;
+pub use self::graphics::Color;
 pub use self::graphics::SceneObject;
 pub use self::graphics::create::SceneObjectCreator;
 pub use self::graphics::render::SceneSettings;
@@ -35,6 +36,7 @@ pub use self::graphics::render::TEXT_NUM_LINES;
 #[derive(Debug)]
 pub enum Event<FireTarget, SwitchTarget, ValueTarget> {
     ControlEvent(ControlEvent<FireTarget, SwitchTarget, ValueTarget>),
+    WindowFocusChanged(bool),
     CloseRequested,
 }
 
@@ -106,7 +108,10 @@ impl<G: Game> Application<G> {
                     },
                     WinitEvent::WindowEvent { event: WindowEvent::CloseRequested, .. } => {
                         game.handle_event(Event::CloseRequested);
-                    }
+                    },
+                    WinitEvent::WindowEvent { event: WindowEvent::Focused(focused), .. } => {
+                        game.handle_event(Event::WindowFocusChanged(focused));
+                    },
                     WinitEvent::DeviceEvent { event, device_id } => controls.process(device_id, event),
                     _ => (),
                 }
@@ -152,6 +157,7 @@ mod tests {
     use crate::Game;
     use crate::Event;
     use crate::LogicalSize;
+    use crate::Color;
     use crate::SceneObjectCreator;
     use crate::SceneRenderer;
     use crate::SceneObject;
@@ -253,13 +259,17 @@ mod tests {
 
         fn render(&self, renderer: SceneRenderer) {
             let mut renderer = renderer.start_object_rendering(&Default::default());
-            renderer.draw(&self.cube, &Matrix4::from_angle_z(Rad (self.cube_rotation)));
+            renderer.draw(
+                &self.cube,
+                Color::white(),
+                &Matrix4::from_angle_z(Rad (self.cube_rotation))
+            );
             let x_cube = Matrix4::from_translation(Vector3::unit_x()) * Matrix4::from_scale(0.05);
             let z_cube = Matrix4::from_translation(Vector3::unit_y()) * Matrix4::from_scale(0.2);
             let y_cube = Matrix4::from_translation(Vector3::unit_z()) * Matrix4::from_scale(0.5);
-            renderer.draw(&self.cube, &x_cube);
-            renderer.draw(&self.cube, &y_cube);
-            renderer.draw(&self.cube, &z_cube);
+            renderer.draw(&self.cube, Color::red(), &x_cube);
+            renderer.draw(&self.cube, Color::green(), &y_cube);
+            renderer.draw(&self.cube, Color::blue(), &z_cube);
             let mut renderer = renderer.start_text_rendering();
             for i in 0..TEXT_NUM_LINES {
                 renderer.draw_text(i, &format!("line {}", i));
