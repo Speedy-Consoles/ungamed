@@ -5,6 +5,7 @@ use glium::Surface;
 use glium::DrawParameters;
 use glium::Program;
 use glium::uniform;
+use glium::texture::texture2d::Texture2d;
 
 use glium_text::TextSystem;
 use glium_text::FontTexture;
@@ -17,7 +18,8 @@ use cgmath::Vector3;
 use cgmath::Rad;
 
 use super::color::Color;
-use super::SceneObject;
+use super::TexturelessSceneObject;
+use super::TexturedSceneObject;
 
 pub const TEXT_NUM_LINES: u64 = 50; // Number of text lines that cover the whole vertical on the screen
 const TEXT_MARGIN: f64 = 0.2; // Line height relative space between lines and to the screen borders,
@@ -132,6 +134,7 @@ pub struct SceneRenderer<'a> {
     frame: &'a mut Frame,
     program: &'a Program,
     draw_parameters: &'a DrawParameters<'a>,
+    white_texture: &'a Texture2d,
     screen_ratio: f64,
     optimal_screen_ratio: f64,
     text_system: &'a TextSystem,
@@ -143,6 +146,7 @@ impl<'a> SceneRenderer<'a> {
         frame: &'a mut Frame,
         program: &'a Program,
         draw_parameters: &'a DrawParameters<'a>,
+        white_texture: &'a Texture2d,
         screen_ratio: f64,
         optimal_screen_ratio: f64,
         text_system: &'a TextSystem,
@@ -152,6 +156,7 @@ impl<'a> SceneRenderer<'a> {
             frame,
             program,
             draw_parameters,
+            white_texture,
             screen_ratio,
             optimal_screen_ratio,
             text_system,
@@ -174,6 +179,7 @@ impl<'a> SceneRenderer<'a> {
             frame: self.frame,
             program: self.program,
             draw_parameters: self.draw_parameters,
+            white_texture: self.white_texture,
             screen_ratio: self.screen_ratio,
             optimal_screen_ratio: self.optimal_screen_ratio,
             world_to_screen_matrix: settings.camera.as_matrix(
@@ -193,6 +199,7 @@ pub struct SceneObjectRenderer<'a> {
     frame: &'a mut Frame,
     program: &'a Program,
     draw_parameters: &'a DrawParameters<'a>,
+    white_texture: &'a Texture2d,
     screen_ratio: f64,
     optimal_screen_ratio: f64,
     world_to_screen_matrix: Matrix4<f32>,
@@ -204,9 +211,9 @@ pub struct SceneObjectRenderer<'a> {
 }
 
 impl<'a> SceneObjectRenderer<'a> {
-    pub fn draw(
+    pub fn draw_textureless(
         &mut self,
-        object: &SceneObject,
+        object: &TexturelessSceneObject,
         color: Color,
         object_to_world_matrix: &Matrix4<f32>
     ) {
@@ -224,6 +231,38 @@ impl<'a> SceneObjectRenderer<'a> {
             directional_light_dir:       directional_light_dir_uniform,
             directional_light_color:     directional_light_color_uniform,
             color:                       color_uniform,
+            tex:                         self.white_texture,
+        };
+
+        self.frame.draw(
+            &object.vertex_buffer,
+            &object.index_buffer,
+            self.program,
+            &uniforms,
+            self.draw_parameters,
+        ).unwrap();
+    }
+    pub fn draw_textured(
+        &mut self,
+        object: &TexturedSceneObject,
+        texture: &Texture2d,
+        object_to_world_matrix: &Matrix4<f32>
+    ) {
+        let object_to_world_matrix_uniform: [[f32; 4]; 4] = (*object_to_world_matrix).into();
+        // TODO The following uniforms only change per frame, not per draw. Can we optimize this?
+        let world_to_screen_matrix_uniform: [[f32; 4]; 4] = self.world_to_screen_matrix.into();
+        let ambient_light_color_uniform: [f32; 3] = self.ambient_light_color.into();
+        let directional_light_dir_uniform: [f32; 3] = self.directional_light_dir.into();
+        let directional_light_color_uniform: [f32; 3] = self.directional_light_color.into();
+        let color_uniform: [f32; 3] = [1.0, 1.0, 1.0];
+        let uniforms = uniform! {
+            object_to_world_matrix:      object_to_world_matrix_uniform,
+            world_to_screen_matrix:      world_to_screen_matrix_uniform,
+            ambient_light_color:         ambient_light_color_uniform,
+            directional_light_dir:       directional_light_dir_uniform,
+            directional_light_color:     directional_light_color_uniform,
+            color:                       color_uniform,
+            tex:                         texture,
         };
 
         self.frame.draw(

@@ -22,9 +22,12 @@ pub use controls::ValueTargetTrait;
 pub use controls::VirtualKeyCode;
 
 pub use cgmath;
+pub use image;
 pub use glium::glutin::dpi::LogicalSize;
+pub use glium::texture::Texture2d;
 pub use self::graphics::color::Color;
-pub use self::graphics::SceneObject;
+pub use self::graphics::TexturelessSceneObject;
+pub use self::graphics::TexturedSceneObject;
 pub use self::graphics::create::SceneObjectCreator;
 pub use self::graphics::render::SceneSettings;
 pub use self::graphics::render::SceneRenderer;
@@ -148,6 +151,7 @@ mod tests {
     use std::time::Instant;
     use std::time::Duration;
     use std::cell::Cell;
+    use std::io::Cursor;
 
     use strum_macros::EnumString;
     use strum_macros::ToString;
@@ -160,11 +164,14 @@ mod tests {
     use crate::Color;
     use crate::SceneObjectCreator;
     use crate::SceneRenderer;
-    use crate::SceneObject;
+    use crate::TexturelessSceneObject;
+    use crate::TexturedSceneObject;
     use crate::cgmath::Vector3;
+    use crate::cgmath::Vector2;
     use crate::cgmath::Matrix4;
     use crate::cgmath::Rad;
     use crate::ValueTargetTrait;
+    use crate::Texture2d;
     use crate::TEXT_NUM_LINES;
 
     const NUM_TICKS: u64 = 131;
@@ -198,7 +205,9 @@ mod tests {
     }
 
     struct TestGame {
-        cube: SceneObject,
+        textured_cube: TexturedSceneObject,
+        textureless_cube: TexturelessSceneObject,
+        cube_texture: Texture2d,
         cube_rotation: f32,
         num_ticks: u64,
         num_renders: Cell<u64>,
@@ -221,27 +230,68 @@ mod tests {
             mut scene_object_creator: SceneObjectCreator,
             _binds: &mut Vec<ControlBind<FireTarget, SwitchTarget, ValueTarget>>,
         ) -> Self {
-            let vertices = [
-                Vector3::new(-0.5,  0.5, -0.5),
-                Vector3::new(-0.5, -0.5, -0.5),
-                Vector3::new(-0.5, -0.5,  0.5),
-                Vector3::new(-0.5,  0.5,  0.5),
-                Vector3::new( 0.5,  0.5, -0.5),
-                Vector3::new( 0.5, -0.5, -0.5),
-                Vector3::new( 0.5, -0.5,  0.5),
-                Vector3::new( 0.5,  0.5,  0.5),
+            let textured_vertices = [
+                (Vector3::new(-0.5, -0.5,  0.5), Vector2::new(0.0, 0.0)),
+                (Vector3::new( 0.5, -0.5,  0.5), Vector2::new(1.0, 0.0)),
+                (Vector3::new(-0.5,  0.5,  0.5), Vector2::new(0.0, 1.0)),
+                (Vector3::new( 0.5,  0.5,  0.5), Vector2::new(1.0, 1.0)),
+
+                (Vector3::new( 0.5, -0.5, -0.5), Vector2::new(0.0, 0.0)),
+                (Vector3::new(-0.5, -0.5, -0.5), Vector2::new(1.0, 0.0)),
+                (Vector3::new( 0.5,  0.5, -0.5), Vector2::new(0.0, 1.0)),
+                (Vector3::new(-0.5,  0.5, -0.5), Vector2::new(1.0, 1.0)),
+
+                (Vector3::new(-0.5, -0.5, -0.5), Vector2::new(0.0, 0.0)),
+                (Vector3::new( 0.5, -0.5, -0.5), Vector2::new(1.0, 0.0)),
+                (Vector3::new(-0.5, -0.5,  0.5), Vector2::new(0.0, 1.0)),
+                (Vector3::new( 0.5, -0.5,  0.5), Vector2::new(1.0, 1.0)),
+
+                (Vector3::new( 0.5,  0.5, -0.5), Vector2::new(0.0, 0.0)),
+                (Vector3::new(-0.5,  0.5, -0.5), Vector2::new(1.0, 0.0)),
+                (Vector3::new( 0.5,  0.5,  0.5), Vector2::new(0.0, 1.0)),
+                (Vector3::new(-0.5,  0.5,  0.5), Vector2::new(1.0, 1.0)),
+
+                (Vector3::new(-0.5,  0.5, -0.5), Vector2::new(0.0, 0.0)),
+                (Vector3::new(-0.5, -0.5, -0.5), Vector2::new(1.0, 0.0)),
+                (Vector3::new(-0.5,  0.5,  0.5), Vector2::new(0.0, 1.0)),
+                (Vector3::new(-0.5, -0.5,  0.5), Vector2::new(1.0, 1.0)),
+
+                (Vector3::new( 0.5, -0.5, -0.5), Vector2::new(0.0, 0.0)),
+                (Vector3::new( 0.5,  0.5, -0.5), Vector2::new(1.0, 0.0)),
+                (Vector3::new( 0.5, -0.5,  0.5), Vector2::new(0.0, 1.0)),
+                (Vector3::new( 0.5,  0.5,  0.5), Vector2::new(1.0, 1.0)),
             ];
 
+            let textureless_vertices: Vec<Vector3<f32>>
+                = textured_vertices.iter().map(|&(p, _)| p).collect();
+
             let indices = [
-                0, 1, 2,  0, 2, 3,
-                1, 5, 6,  1, 6, 2,
-                5, 4, 7,  5, 7, 6,
-                4, 0, 3,  4, 3, 7,
-                0, 4, 5,  0, 5, 1,
-                3, 2, 6,  3, 6, 7u32,
+                 0,  1,  3,   0,  3,  2,
+                 4,  5,  7,   4,  7,  6,
+                 8,  9, 11,   8, 11, 10,
+                12, 13, 15,  12, 15, 14,
+                16, 17, 19,  16, 19, 18,
+                20, 21, 23,  20, 23, 22,
             ];
+
+            let cube_texture = scene_object_creator.create_texture(image::load(
+                Cursor::new(&include_bytes!("../images/test_image.png")[..]),
+                image::PNG,
+            ).unwrap());
+
+            let textured_cube = scene_object_creator.create_textured(
+                &textured_vertices,
+                &indices
+            );
+            let textureless_cube = scene_object_creator.create_textureless(
+                textureless_vertices.as_ref(),
+                &indices
+            );
+
             TestGame {
-                cube: scene_object_creator.create(&vertices, &indices),
+                textured_cube,
+                textureless_cube,
+                cube_texture,
                 cube_rotation: 0.0,
                 num_ticks: 0,
                 num_renders: Cell::new(0),
@@ -259,17 +309,17 @@ mod tests {
 
         fn render(&self, renderer: SceneRenderer) {
             let mut renderer = renderer.start_object_rendering(&Default::default());
-            renderer.draw(
-                &self.cube,
-                Color::white(),
-                &Matrix4::from_angle_z(Rad (self.cube_rotation))
+            renderer.draw_textured(
+                &self.textured_cube,
+                &self.cube_texture,
+                &Matrix4::from_angle_z(Rad(self.cube_rotation)),
             );
             let x_cube = Matrix4::from_translation(Vector3::unit_x()) * Matrix4::from_scale(0.05);
             let z_cube = Matrix4::from_translation(Vector3::unit_y()) * Matrix4::from_scale(0.2);
             let y_cube = Matrix4::from_translation(Vector3::unit_z()) * Matrix4::from_scale(0.5);
-            renderer.draw(&self.cube, Color::red(), &x_cube);
-            renderer.draw(&self.cube, Color::green(), &y_cube);
-            renderer.draw(&self.cube, Color::blue(), &z_cube);
+            renderer.draw_textureless(&self.textureless_cube, Color::red(), &x_cube);
+            renderer.draw_textureless(&self.textureless_cube, Color::green(), &y_cube);
+            renderer.draw_textureless(&self.textureless_cube, Color::blue(), &z_cube);
             let mut renderer = renderer.start_text_rendering();
             for i in 0..TEXT_NUM_LINES {
                 renderer.draw_text(i, &format!("line {}", i));

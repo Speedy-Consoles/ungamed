@@ -4,10 +4,14 @@ pub mod color;
 
 use glium::Display;
 use glium::DrawParameters;
+use glium::Blend;
 use glium::Program;
 use glium::Depth;
 use glium::glutin::dpi::LogicalSize;
 use glium::implement_vertex;
+use glium::VertexBuffer;
+use glium::IndexBuffer;
+use glium::texture::texture2d::Texture2d;
 
 use glium_text::TextSystem;
 use glium_text::TextDisplay;
@@ -23,15 +27,21 @@ const GEOMETRY_SHADER_SOURCE: &'static str = include_str!("../../shader_src/geom
 const TEXT_FONT_SIZE: u32 = 20;
 
 #[derive(Copy, Clone)]
-struct Vertex {
-    position: [f32; 3]
+pub struct Vertex {
+    position: [f32; 3],
+    texture_position: [f32; 2],
 }
 
-implement_vertex!(Vertex, position);
+implement_vertex!(Vertex, position, texture_position);
 
-pub struct SceneObject {
-    vertex_buffer: glium::VertexBuffer<Vertex>,
-    index_buffer: glium::IndexBuffer<u32>,
+pub struct TexturelessSceneObject {
+    vertex_buffer: VertexBuffer<Vertex>,
+    index_buffer: IndexBuffer<u32>,
+}
+
+pub struct TexturedSceneObject {
+    vertex_buffer: VertexBuffer<Vertex>,
+    index_buffer: IndexBuffer<u32>,
 }
 
 pub struct Graphics {
@@ -42,6 +52,7 @@ pub struct Graphics {
     optimal_screen_ratio: f64,
     text_system: TextSystem,
     text_display: TextDisplay<Box<FontTexture>>,
+    white_texture: Texture2d,
 }
 
 impl Graphics {
@@ -61,6 +72,7 @@ impl Graphics {
                 write: true,
                 ..Default::default()
             },
+            blend: Blend::alpha_blending(),
             ..Default::default()
         };
 
@@ -76,6 +88,9 @@ impl Graphics {
         let text_system = TextSystem::new(&display);
         let text_display = TextDisplay::new(&text_system, Box::new(font), "");
 
+        // create an empty texture
+        let white_texture = Texture2d::new(&display, vec![vec![(1.0, 1.0, 1.0, 1.0)]]).unwrap();
+
         // create the graphics
         Graphics {
             display,
@@ -85,6 +100,7 @@ impl Graphics {
             optimal_screen_ratio,
             text_system,
             text_display,
+            white_texture,
         }
     }
 
@@ -97,6 +113,7 @@ impl Graphics {
             &mut frame,
             &self.program,
             &self.draw_parameters,
+            &self.white_texture,
             self.screen_ratio,
             self.optimal_screen_ratio,
             &self.text_system,
