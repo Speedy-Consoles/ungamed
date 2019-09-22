@@ -5,8 +5,9 @@ authors = ["Speedy Consoles <rubihome@gmx.de>"]
 edition = "2018"
 
 [dependencies]
-glium = "0.23.0"
-glium_text = "0.14.0"
+glium = "0.26.0-alpha3"
+#glium_text = "0.14.0"
+glium_text = { path = "../glium_text" }
 cgmath = "0.17.0"
 image = "0.21.0"
 controls = { path = "../controls" }

@@ -5,9 +5,10 @@ use std::time::Duration;
 use std::hash::Hash;
 use std::str::FromStr;
 
-use glium::glutin::Event as WinitEvent;
-use glium::glutin::EventsLoop;
-use glium::glutin::WindowEvent;
+use glium::glutin::event::Event as WinitEvent;
+use glium::glutin::event_loop::EventLoop;
+use glium::glutin::event::WindowEvent;
+use glium::glutin::event_loop::ControlFlow;
 
 use controls::Controls;
 use self::graphics::Graphics;
@@ -65,18 +66,18 @@ pub trait Game {
 pub struct Application<G: Game> {
     game: G,
     graphics: Graphics,
-    events_loop: EventsLoop,
+    event_loop: EventLoop<()>,
     controls: Controls<G::FireTarget, G::SwitchTarget, G::ValueTarget>
 }
 
-impl<G: Game> Application<G> {
+impl<G: 'static + Game> Application<G> {
     pub fn new() -> Self {
-        let events_loop = glium::glutin::EventsLoop::new();
-        let window = glium::glutin::WindowBuilder::new()
-            .with_dimensions(G::optimal_window_size())
+        let event_loop = EventLoop::new();
+        let window = glium::glutin::window::WindowBuilder::new()
+            .with_inner_size(G::optimal_window_size())
             .with_title(G::title());
         let context = glium::glutin::ContextBuilder::new();
-        let display = glium::Display::new(window, context, &events_loop).unwrap();
+        let display = glium::Display::new(window, context, &event_loop).unwrap();
         let mut binds = Vec::new();
         let mut graphics = Graphics::new(display, G::optimal_window_size());
         let game = G::new(graphics.object_creator(), &mut binds);
@@ -85,12 +86,12 @@ impl<G: Game> Application<G> {
         Self {
             game,
             graphics,
-            events_loop,
+            event_loop,
             controls,
         }
     }
 
-    pub fn run(&mut self, tick_rate: u32) {
+    pub fn run(self, tick_rate: u32) -> ! {
         let now = Instant::now();
         let start_time = now;
         let mut num_ticks = 0;
@@ -100,56 +101,57 @@ impl<G: Game> Application<G> {
         let mut next_tick_time = now;
         let mut next_render_time = now;
 
-        loop {
-            let game = &mut self.game;
-            let graphics = &mut self.graphics;
-            let controls = &mut self.controls;
-            self.events_loop.poll_events(|event| {
-                match event {
-                    WinitEvent::WindowEvent { event: WindowEvent::Resized(size), .. } => {
-                        graphics.set_view_port_size(size);
-                    },
-                    WinitEvent::WindowEvent { event: WindowEvent::CloseRequested, .. } => {
-                        game.handle_event(Event::CloseRequested);
-                    },
-                    WinitEvent::WindowEvent { event: WindowEvent::Focused(focused), .. } => {
-                        game.handle_event(Event::WindowFocusChanged(focused));
-                    },
-                    WinitEvent::DeviceEvent { event, device_id } => controls.process(device_id, event),
-                    _ => (),
-                }
-                controls.get_events().for_each(|e| game.handle_event(Event::ControlEvent(e)));
-            });
+        let mut game = self.game;
+        let mut graphics = self.graphics;
+        let mut controls = self.controls;
+        let event_loop = self.event_loop;
+
+        event_loop.run(move |event, _, control_flow| {
+            match event {
+                WinitEvent::WindowEvent { event: WindowEvent::Resized(size), .. } => {
+                    graphics.set_view_port_size(size);
+                },
+                WinitEvent::WindowEvent { event: WindowEvent::CloseRequested, .. } => {
+                    game.handle_event(Event::CloseRequested);
+                },
+                WinitEvent::WindowEvent { event: WindowEvent::Focused(focused), .. } => {
+                    game.handle_event(Event::WindowFocusChanged(focused));
+                },
+                WinitEvent::DeviceEvent { event, device_id } => controls.process(device_id, event),
+                _ => eprintln!("{:?}", event),
+            }
+            controls.get_events().for_each(|e| game.handle_event(Event::ControlEvent(e)));
 
             if Instant::now() >= next_tick_time {
-                self.game.tick();
+                game.tick();
                 num_ticks += 1;
                 next_tick_time = start_time + Duration::from_secs(num_ticks) / tick_rate;
             }
             if Instant::now() >= next_render_time {
-                self.graphics.render(&self.game);
+                graphics.render(&game);
                 num_renders += 1;
                 // TODO adapt render_phase and render_rate
                 next_render_time = start_time + render_phase
                     + Duration::from_secs(num_renders) / render_rate;
             }
-            if self.game.finished() {
-                break;
-            }
             let now = Instant::now();
             let next_loop_time = next_tick_time.min(next_render_time);
-            if now < next_loop_time {
-                std::thread::sleep(next_loop_time - now);
+            if game.finished() {
+                *control_flow = ControlFlow::Exit;
+            } else if now < next_loop_time {
+                *control_flow = ControlFlow::WaitUntil(next_loop_time);
+            } else {
+                *control_flow = ControlFlow::Poll; // maybe this is unnecessary
             }
-        }
+        });
     }
 }
 
 
 #[cfg(test)]
 mod tests {
-    use std::time::Instant;
-    use std::time::Duration;
+    //use std::time::Instant;
+    //use std::time::Duration;
     use std::cell::Cell;
     use std::io::Cursor;
 
@@ -334,11 +336,12 @@ mod tests {
 
     #[test]
     fn test_all() {
-        let mut app: Application<TestGame> = Application::new();
+        let app: Application<TestGame> = Application::new();
 
-        let start_time = Instant::now();
+        // TODO move the checks into run
+        //let start_time = Instant::now();
         app.run(TICK_RATE);
-        let duration = Instant::now() - start_time;
+        /*let duration = Instant::now() - start_time;
 
         assert_eq!(app.game.num_ticks, NUM_TICKS);
         assert!(
@@ -360,6 +363,6 @@ mod tests {
             "run duration differs: {:?} != {:?}",
             duration,
             TARGET_DURATION
-        );
+        );*/
     }
 }

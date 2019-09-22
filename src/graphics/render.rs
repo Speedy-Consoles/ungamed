@@ -242,6 +242,7 @@ impl<'a> SceneObjectRenderer<'a> {
             self.draw_parameters,
         ).unwrap();
     }
+
     pub fn draw_textured(
         &mut self,
         object: &TexturedSceneObject,
