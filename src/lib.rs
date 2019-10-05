@@ -43,7 +43,7 @@ pub enum Event<FireTarget, SwitchTarget, ValueTarget> {
     ControlEvent(ControlEvent<FireTarget, SwitchTarget, ValueTarget>),
     WindowFocusChanged(bool),
     CloseRequested,
-    GameEnded,
+    GameUpdated,
 }
 
 pub enum AppTransition<G> {
@@ -83,7 +83,8 @@ pub enum GameStatus {
 }
 
 pub trait Game {
-    fn update(&mut self) -> GameStatus;
+    fn update(&mut self);
+    fn status(&self) -> GameStatus;
 }
 
 pub struct GameInfo<'a, G: Game> {
@@ -100,6 +101,17 @@ struct GameData<G: Game> {
 }
 
 impl<G: Game> GameData<G> {
+    fn maybe_update(&mut self) -> bool {
+        match self.next_update_time() {
+            Some(nut) if nut <= Instant::now() => {
+                self.game.update();
+                self.num_updates += 1;
+                true
+            },
+            _ => false,
+        }
+    }
+
     fn game_info(&self) -> GameInfo<G> {
         GameInfo {
             game: &self.game,
@@ -110,21 +122,65 @@ impl<G: Game> GameData<G> {
     fn paused(&self) -> bool {
         self.pause_start.is_some()
     }
+
+    fn next_update_time(&self) -> Option<Instant> {
+        if self.paused() {
+            return None;
+        }
+        Some(next_tick_time(self.update_ref_time, self.num_updates, self.update_rate))
+    }
 }
 
-struct AppWrapper<A: Application> {
-    application: A,
-    controls: Controls<A::FireTarget, A::SwitchTarget, A::ValueTarget>,
+struct GraphicsData {
     graphics: Graphics,
+    render_ref_time: Instant,
     num_renders: u64,
     render_rate: u32,
     render_phase: Duration,
+}
+
+impl GraphicsData {
+    fn next_render_time(&self) -> Instant {
+        next_tick_time(
+            self.render_ref_time + self.render_phase,
+            self.num_renders,
+            self.render_rate
+        )
+    }
+
+    fn maybe_render<A: Application>(
+        &mut self,
+        application: &A,
+        game_info: Option<GameInfo<A::G>>
+    ) -> bool {
+        let next_render_time = self.next_render_time();
+        let now = Instant::now();
+        if now >= next_render_time {
+            println!("{:?}", now - next_render_time);
+            let start = Instant::now();
+            self.graphics.render(application, game_info);
+            let render_duration = Instant::now() - start;
+            if render_duration > Duration::from_millis(10) {
+                self.render_phase += render_duration - Duration::from_millis(3);
+            }
+            println!("render_duration: {:?}", render_duration);
+            self.num_renders += 1;
+            // TODO adapt render_phase and render_rate
+            return true;
+        }
+        return false;
+    }
+}
+
+struct Engine<A: Application> {
+    application: A,
+    controls: Controls<A::FireTarget, A::SwitchTarget, A::ValueTarget>,
     game_data: Option<GameData<A::G>>,
-    render_ref_time: Instant,
+    graphics_data: GraphicsData,
     closing: bool,
 }
 
-impl<A: Application> AppWrapper<A> {
+impl<A: Application> Engine<A> {
     fn emit_event(
         &mut self,
         event: Event<A::FireTarget, A::SwitchTarget, A::ValueTarget>
@@ -183,7 +239,7 @@ impl<A: Application> AppWrapper<A> {
     fn handle_event(&mut self, event: WinitEvent<()>) {
         match event {
             WinitEvent::WindowEvent { event: WindowEvent::Resized(size), .. } => {
-                self.graphics.set_view_port_size(size);
+                self.graphics_data.graphics.set_view_port_size(size);
             },
             WinitEvent::WindowEvent { event: WindowEvent::CloseRequested, .. } => {
                 self.emit_event(Event::CloseRequested);
@@ -198,61 +254,34 @@ impl<A: Application> AppWrapper<A> {
         }
     }
 
-    fn update_game(&mut self) -> Option<Instant> {
+    fn maybe_update_game(&mut self) -> Option<Instant> {
         if let Some(ref mut gd) = self.game_data {
-            if gd.paused() {
-                return None;
-            }
-            let mut next_update_time = Self::next_tick_time(
-                gd.update_ref_time,
-                gd.num_updates,
-                gd.update_rate,
-            );
-            if Instant::now() >= next_update_time {
-                let status = gd.game.update();
+            if gd.maybe_update() {
+                let status = gd.game.status();
+                let next_update_time = gd.next_update_time();
+                self.emit_event(Event::GameUpdated);
                 if let GameStatus::Ended = status {
-                    self.emit_event(Event::GameEnded);
                     self.game_data = None;
-                } else {
-                    gd.num_updates += 1;
-                    if gd.paused() {
-                        return None
-                    }
-                    next_update_time = Self::next_tick_time(
-                        gd.update_ref_time,
-                        gd.num_updates,
-                        gd.update_rate,
-                    );
+                    return None;
                 }
+                return next_update_time;
             }
-            return Some(next_update_time);
+            return gd.next_update_time();
         }
-        None
+        return None;
     }
 
-    fn render(&mut self) -> Instant {
-        let mut next_render_time = Self::next_tick_time(
-            self.render_ref_time + self.render_phase,
-            self.num_renders,
-            self.render_rate,
+    fn maybe_render(&mut self) -> Instant {
+        self.graphics_data.maybe_render(
+            &self.application,
+            self.game_data.as_ref().map(|gd| gd.game_info())
         );
-        if Instant::now() >= next_render_time {
-            let game_info = self.game_data.as_ref().map(|gd| gd.game_info());
-            self.graphics.render(&self.application, game_info);
-            self.num_renders += 1;
-            // TODO adapt render_phase and render_rate
-            next_render_time = Self::next_tick_time(
-                self.render_ref_time + self.render_phase,
-                self.num_renders,
-                self.render_rate,
-            );
-        }
-        next_render_time
+        return self.graphics_data.next_render_time();
     }
+}
 
-    fn next_tick_time(ref_time: Instant, num_ticks: u64, tick_rate: u32) -> Instant {
-        ref_time + Duration::from_secs(num_ticks) / tick_rate
-    }
+fn next_tick_time(ref_time: Instant, num_ticks: u64, tick_rate: u32) -> Instant {
+    ref_time + Duration::from_secs(num_ticks) / tick_rate
 }
 
 pub fn run_application<A: Application + 'static>() -> ! {
@@ -268,54 +297,53 @@ pub fn run_application<A: Application + 'static>() -> ! {
     let mut controls = Controls::new();
     let application = A::new(graphics.object_creator(), &mut binds);
     binds.into_iter().for_each(|bind| controls.add_bind(bind));
-    let mut app_wrapper = AppWrapper {
+    let mut engine = Engine {
         application,
         controls,
-        graphics,
-        num_renders: 0,
-        render_rate: 60,
-        render_phase: Duration::from_secs(0),
+        graphics_data: GraphicsData {
+            graphics,
+            render_ref_time: Instant::now(),
+            num_renders: 0,
+            render_rate: 60,
+            render_phase: Duration::from_secs(0),
+        },
         game_data: None,
-        render_ref_time: Instant::now(),
         closing: false,
     };
 
     // main loop
     let mut event_buffer = VecDeque::new();
     event_loop.run(move |event, _, control_flow| {
-        app_wrapper.handle_event(event);
-        if app_wrapper.closing {
+        engine.handle_event(event);
+
+        // this must not be in the device event branch of handle_event,
+        // because events may also be produced by binding/unbinding
+        engine.controls.get_events(&mut event_buffer);
+        for event in event_buffer.drain(..) {
+            engine.emit_event(Event::ControlEvent(event));
+        }
+
+        // update the game
+        let next_tick_time = engine.maybe_update_game();
+
+        // render the screen
+        let next_render_time = engine.maybe_render();
+
+        // close application
+        if engine.closing {
             *control_flow = ControlFlow::Exit;
             return;
         };
 
-        // this must not be in the device event branch of handle_event,
-        // because events may also be produced by binding/unbinding
-        app_wrapper.controls.get_events(&mut event_buffer);
-        for event in event_buffer.drain(..) {
-            app_wrapper.emit_event(Event::ControlEvent(event));
-        }
-
-        // update the game
-        let mut next_loop_time = app_wrapper.update_game();
-
-        // render the screen
-        let next_render_time = app_wrapper.render();
-        match next_loop_time {
-            None => next_loop_time = Some(next_render_time),
-            Some(ref nlt) if *nlt > next_render_time => next_loop_time = Some(next_render_time),
-            _ => (),
-        }
-
         // schedule next loop
-        if let Some(nlt) = next_loop_time {
-            if Instant::now() < nlt {
-                *control_flow = ControlFlow::WaitUntil(nlt);
-            } else {
-                // ControlFlow::Poll seems to skip fetching window events
-                //*control_flow = ControlFlow::Poll;
-                *control_flow = ControlFlow::WaitUntil(nlt);
-            }
+        let next_loop_time = next_tick_time.map_or(next_render_time, |x| x.min(next_render_time));
+        if Instant::now() < next_loop_time {
+            *control_flow = ControlFlow::WaitUntil(next_loop_time);
+        } else {
+            // ControlFlow::Poll seems to skip fetching window events
+            //*control_flow = ControlFlow::Poll;
+            *control_flow = ControlFlow::WaitUntil(next_loop_time);
+            println!("polling");
         }
     });
 }
@@ -387,9 +415,12 @@ mod tests {
     }
 
     impl Game for TestGame {
-        fn update(&mut self) -> GameStatus {
+        fn update(&mut self) {
             self.cube_rotation += 0.05;
             self.num_updates += 1;
+        }
+
+        fn status(&self) -> GameStatus {
             GameStatus::Running
         }
     }
@@ -528,7 +559,11 @@ mod tests {
                     ControlEvent::Switch { .. } => AppTransition::None,
                     ControlEvent::Value { .. } => AppTransition::None,
                 },
-                Event::GameEnded | Event::WindowFocusChanged(_) => AppTransition::None,
+                Event::GameUpdated => AppTransition::None,
+                Event::WindowFocusChanged(focus) => {
+                    println!("focus: {}", focus);
+                    AppTransition::None
+                },
                 Event::CloseRequested => AppTransition::CloseApplication,
             }
         }
