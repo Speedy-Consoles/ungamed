@@ -50,7 +50,7 @@ pub enum AppTransition<G> {
     NewSinglePlayer(G),
     PauseSinglePlayer,
     ResumeSinglePlayer,
-    EndSinglePlayer,
+    CloseSinglePlayer,
     CloseApplication,
     None,
 }
@@ -83,18 +83,19 @@ pub enum GameStatus {
 }
 
 pub trait Game {
-    fn update(&mut self);
-    fn status(&self) -> GameStatus;
+    fn update(&mut self) -> GameStatus;
 }
 
 pub struct GameInfo<'a, G: Game> {
     game: &'a G,
     paused: bool,
+    ended: bool,
 }
 
 struct GameData<G: Game> {
     game: G,
     pause_start: Option<Instant>,
+    ended: bool,
     update_ref_time: Instant,
     num_updates: u64,
     update_rate: u32,
@@ -102,9 +103,14 @@ struct GameData<G: Game> {
 
 impl<G: Game> GameData<G> {
     fn maybe_update(&mut self) -> bool {
+        if self.ended {
+            return false;
+        }
         match self.next_update_time() {
             Some(nut) if nut <= Instant::now() => {
-                self.game.update();
+                if let GameStatus::Ended = self.game.update() {
+                    self.ended = true;
+                }
                 self.num_updates += 1;
                 true
             },
@@ -116,6 +122,7 @@ impl<G: Game> GameData<G> {
         GameInfo {
             game: &self.game,
             paused: self.paused(),
+            ended: self.ended,
         }
     }
 
@@ -140,14 +147,6 @@ struct GraphicsData {
 }
 
 impl GraphicsData {
-    fn next_render_time(&self) -> Instant {
-        next_tick_time(
-            self.render_ref_time + self.render_phase,
-            self.num_renders,
-            self.render_rate
-        )
-    }
-
     fn maybe_render<A: Application>(
         &mut self,
         application: &A,
@@ -156,19 +155,27 @@ impl GraphicsData {
         let next_render_time = self.next_render_time();
         let now = Instant::now();
         if now >= next_render_time {
-            println!("{:?}", now - next_render_time);
+            eprintln!("{:?}", now - next_render_time);
             let start = Instant::now();
             self.graphics.render(application, game_info);
             let render_duration = Instant::now() - start;
             if render_duration > Duration::from_millis(10) {
                 self.render_phase += render_duration - Duration::from_millis(3);
             }
-            println!("render_duration: {:?}", render_duration);
+            eprintln!("render_duration: {:?}", render_duration);
             self.num_renders += 1;
             // TODO adapt render_phase and render_rate
             return true;
         }
         return false;
+    }
+
+    fn next_render_time(&self) -> Instant {
+        next_tick_time(
+            self.render_ref_time + self.render_phase,
+            self.num_renders,
+            self.render_rate
+        )
     }
 }
 
@@ -183,7 +190,7 @@ struct Engine<A: Application> {
 impl<A: Application> Engine<A> {
     fn emit_event(
         &mut self,
-        event: Event<A::FireTarget, A::SwitchTarget, A::ValueTarget>
+        event: Event<A::FireTarget, A::SwitchTarget, A::ValueTarget>,
     ) {
         let game_info = self.game_data.as_ref().map(|gd| gd.game_info());
         // TODO checking app transitions is ugly.
@@ -191,45 +198,50 @@ impl<A: Application> Engine<A> {
         match self.application.handle_event(event, game_info) {
             AppTransition::NewSinglePlayer(g) => {
                 match self.game_data {
-                    None => {
-                        let now = Instant::now();
+                    Some(GameData { ended: true, .. }) | None => {
                         self.game_data = Some(GameData {
                             game: g,
                             pause_start: None,
-                            update_ref_time: now,
+                            ended: false,
+                            update_ref_time: Instant::now(),
                             num_updates: 0,
                             update_rate: 50,
                         });
                     },
-                    Some(_) => panic!("We already have a game!"),
+                    _ => panic!("We already have a running game!"),
                 }
             },
-            AppTransition::EndSinglePlayer => {
-                assert!(self.game_data.is_some(), "No game to end!");
+            AppTransition::CloseSinglePlayer => {
+                assert!(self.game_data.is_some(), "No game to close!");
                 self.game_data = None;
             },
             AppTransition::CloseApplication => self.closing = true,
             AppTransition::PauseSinglePlayer => {
                 match self.game_data {
-                    Some(ref mut gd) => {
-                        assert!(gd.pause_start.is_none(), "Game already paused!");
-                        gd.pause_start = Some(Instant::now())
+                    Some(GameData { ended: false, ref mut pause_start, .. }) => {
+                        assert!(pause_start.is_none(), "Game already paused!");
+                        *pause_start = Some(Instant::now())
                     },
-                    None => panic!("No game to pause!"),
+                    _ => panic!("No running game to pause!"),
                 }
             },
             AppTransition::ResumeSinglePlayer => {
                 match self.game_data {
-                    Some(ref mut gd) => {
-                        match gd.pause_start {
+                    Some(GameData {
+                         ended: false,
+                         ref mut pause_start,
+                         ref mut update_ref_time,
+                         ..
+                     }) => {
+                        match *pause_start {
                             Some(start) => {
-                                gd.update_ref_time += Instant::now() - start;
-                                gd.pause_start = None;
+                                *update_ref_time += Instant::now() - start;
+                                *pause_start = None;
                             },
                             None => panic!("Game already running!"),
                         }
                     },
-                    None => panic!("No game to resume!"),
+                    _ => panic!("No game to resume!"),
                 }
             },
             AppTransition::None => (),
@@ -257,13 +269,8 @@ impl<A: Application> Engine<A> {
     fn maybe_update_game(&mut self) -> Option<Instant> {
         if let Some(ref mut gd) = self.game_data {
             if gd.maybe_update() {
-                let status = gd.game.status();
                 let next_update_time = gd.next_update_time();
                 self.emit_event(Event::GameUpdated);
-                if let GameStatus::Ended = status {
-                    self.game_data = None;
-                    return None;
-                }
                 return next_update_time;
             }
             return gd.next_update_time();
@@ -415,12 +422,9 @@ mod tests {
     }
 
     impl Game for TestGame {
-        fn update(&mut self) {
+        fn update(&mut self) -> GameStatus {
             self.cube_rotation += 0.05;
             self.num_updates += 1;
-        }
-
-        fn status(&self) -> GameStatus {
             GameStatus::Running
         }
     }
@@ -540,13 +544,13 @@ mod tests {
                     },
                     ControlEvent::Fire(FireTarget::EndGame) => {
                         if game_info.is_some() {
-                            AppTransition::EndSinglePlayer
+                            AppTransition::CloseSinglePlayer
                         } else {
                             AppTransition::None
                         }
                     },
                     ControlEvent::Fire(FireTarget::ToggleGamePause) => {
-                        if let Some(GameInfo { game: _, paused }) = game_info {
+                        if let Some(GameInfo { game: _, paused, ended: false }) = game_info {
                             if paused {
                                 AppTransition::ResumeSinglePlayer
                             } else {
@@ -570,7 +574,7 @@ mod tests {
 
         fn render(&self, game_info: Option<GameInfo<TestGame>>, renderer: SceneRenderer) {
             let mut renderer = renderer.start_object_rendering(&Default::default());
-            if let Some(GameInfo { game, paused: _ }) = game_info {
+            if let Some(GameInfo { game, paused: _, ended: false }) = game_info {
                 renderer.draw_textured(
                     &self.textured_cube,
                     &self.cube_texture,
