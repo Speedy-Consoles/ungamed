@@ -17,9 +17,11 @@ use glium_text::TextSystem;
 use glium_text::TextDisplay;
 use glium_text::FontTexture;
 
+use crate::GameInfo;
+use crate::GraphicsInfo;
+
 use self::create::SceneObjectCreator;
 use self::render::SceneRenderer;
-use crate::{GameInfo, GraphicsInfo};
 
 const VERTEX_SHADER_SOURCE: &'static str = include_str!("../../shader_src/vertex_shader.vert");
 const FRAGMENT_SHADER_SOURCE: &'static str = include_str!("../../shader_src/fragment_shader.frag");

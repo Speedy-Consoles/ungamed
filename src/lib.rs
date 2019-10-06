@@ -46,15 +46,6 @@ pub enum Event<FireTarget, SwitchTarget, ValueTarget> {
     GameUpdated,
 }
 
-pub enum AppTransition<G> {
-    NewSinglePlayer(G),
-    PauseSinglePlayer,
-    ResumeSinglePlayer,
-    CloseSinglePlayer,
-    CloseApplication,
-    None,
-}
-
 pub trait Application {
     type FireTarget: Copy + Eq + Hash + FromStr + ToString;
     type SwitchTarget: Copy + Eq + Hash + FromStr + ToString;
@@ -71,11 +62,12 @@ pub trait Application {
     fn handle_event(
         &mut self,
         event: Event<Self::FireTarget, Self::SwitchTarget, Self::ValueTarget>,
-        game_info: Option<GameInfo<Self::G>>,
-    ) -> AppTransition<Self::G>;
+        controller: ApplicationController<Self>,
+    );
+
     fn render(
         &self,
-        game: Option<GameInfo<Self::G>>,
+        game_info: Option<GameInfo<Self::G>>,
         graphics_info: GraphicsInfo,
         renderer: SceneRenderer
     );
@@ -91,10 +83,91 @@ pub trait Game {
     fn update(&mut self) -> GameStatus;
 }
 
+pub struct ApplicationController<'a, A: ?Sized + Application> {
+    closing: &'a mut bool,
+    pub game_controller: GameController<'a, A::G>,
+}
+
+impl<'a, A: Application> ApplicationController<'a, A> {
+    pub fn close(self) {
+        *self.closing = true;
+    }
+}
+
 pub struct GameInfo<'a, G: Game> {
     pub game: &'a G,
     pub paused: bool,
     pub ended: bool,
+}
+
+pub struct RunningGameController<'a, G: Game> {
+    game_data: &'a mut Option<GameData<G>>,
+}
+
+impl<'a, G: Game> RunningGameController<'a, G> {
+    pub fn pause(self) -> PausedGameController<'a, G> {
+        self.game_data.as_mut().unwrap().pause_start = Some(Instant::now());
+        PausedGameController { game_data: self.game_data }
+    }
+
+    pub fn close(self) -> ClosedGameController<'a, G> {
+        *self.game_data = None;
+        ClosedGameController { game_data: self.game_data }
+    }
+}
+
+pub struct PausedGameController<'a, G: Game> {
+    game_data: &'a mut Option<GameData<G>>,
+}
+
+impl<'a, G: Game> PausedGameController<'a, G> {
+    pub fn resume(self) -> RunningGameController<'a, G> {
+        let gd = self.game_data.as_mut().unwrap();
+        gd.update_ref_time += Instant::now() - gd.pause_start.unwrap();
+        gd.pause_start = None;
+        RunningGameController { game_data: self.game_data }
+    }
+
+    pub fn close(self) -> ClosedGameController<'a, G> {
+        *self.game_data = None;
+        ClosedGameController { game_data: self.game_data }
+    }
+}
+
+pub struct EndedGameController<'a, G: Game> {
+    game_data: &'a mut Option<GameData<G>>,
+}
+
+impl<'a, G: Game> EndedGameController<'a, G> {
+    pub fn close(self) -> ClosedGameController<'a, G> {
+        *self.game_data = None;
+        ClosedGameController { game_data: self.game_data }
+    }
+}
+
+pub struct ClosedGameController<'a, G: Game> {
+    game_data: &'a mut Option<GameData<G>>,
+}
+
+impl<'a, G: Game> ClosedGameController<'a, G> {
+    pub fn start_new(self, game: G) -> RunningGameController<'a, G> {
+        *self.game_data = Some(GameData {
+            game,
+            pause_start: None,
+            ended: false,
+            update_ref_time: Instant::now(),
+            num_updates: 0,
+            update_rate: 50,
+        });
+        RunningGameController { game_data: self.game_data }
+    }
+}
+
+pub enum GameController<'a, G: Game> {
+    Running(RunningGameController<'a, G>),
+    Paused(PausedGameController<'a, G>),
+    Ended(EndedGameController<'a, G>),
+    Closed(ClosedGameController<'a, G>),
 }
 
 pub struct GraphicsInfo {
@@ -112,9 +185,6 @@ struct GameData<G: Game> {
 
 impl<G: Game> GameData<G> {
     fn maybe_update(&mut self) -> bool {
-        if self.ended {
-            return false;
-        }
         match self.next_update_time() {
             Some(nut) if nut <= Instant::now() => {
                 if let GameStatus::Ended = self.game.update() {
@@ -140,7 +210,7 @@ impl<G: Game> GameData<G> {
     }
 
     fn next_update_time(&self) -> Option<Instant> {
-        if self.paused() {
+        if self.paused() || self.ended {
             return None;
         }
         Some(next_tick_time(self.update_ref_time, self.num_updates, self.update_rate))
@@ -161,7 +231,7 @@ impl GraphicsData {
     fn maybe_render<A: Application>(
         &mut self,
         application: &A,
-        game_info: Option<GameInfo<A::G>>
+        game_info: Option<GameInfo<A::G>>,
     ) -> bool {
         let next_render_time = self.next_render_time();
         let now = Instant::now();
@@ -209,60 +279,23 @@ impl<A: Application> Engine<A> {
         &mut self,
         event: Event<A::FireTarget, A::SwitchTarget, A::ValueTarget>,
     ) {
-        let game_info = self.game_data.as_ref().map(|gd| gd.game_info());
-        // TODO checking app transitions is ugly.
-        // TODO Maybe pass some kind of control structure to handle_event.
-        match self.application.handle_event(event, game_info) {
-            AppTransition::NewSinglePlayer(g) => {
-                match self.game_data {
-                    Some(GameData { ended: true, .. }) | None => {
-                        self.game_data = Some(GameData {
-                            game: g,
-                            pause_start: None,
-                            ended: false,
-                            update_ref_time: Instant::now(),
-                            num_updates: 0,
-                            update_rate: 50,
-                        });
-                    },
-                    _ => panic!("We already have a running game!"),
+        let game_controller = match self.game_data {
+            Some(ref gd) => {
+                if gd.ended {
+                    GameController::Ended(EndedGameController { game_data: &mut self.game_data })
+                } else if gd.paused() {
+                    GameController::Paused(PausedGameController { game_data: &mut self.game_data })
+                } else {
+                    GameController::Running(RunningGameController { game_data: &mut self.game_data })
                 }
             },
-            AppTransition::CloseSinglePlayer => {
-                assert!(self.game_data.is_some(), "No game to close!");
-                self.game_data = None;
-            },
-            AppTransition::CloseApplication => self.closing = true,
-            AppTransition::PauseSinglePlayer => {
-                match self.game_data {
-                    Some(GameData { ended: false, ref mut pause_start, .. }) => {
-                        assert!(pause_start.is_none(), "Game already paused!");
-                        *pause_start = Some(Instant::now())
-                    },
-                    _ => panic!("No running game to pause!"),
-                }
-            },
-            AppTransition::ResumeSinglePlayer => {
-                match self.game_data {
-                    Some(GameData {
-                         ended: false,
-                         ref mut pause_start,
-                         ref mut update_ref_time,
-                         ..
-                     }) => {
-                        match *pause_start {
-                            Some(start) => {
-                                *update_ref_time += Instant::now() - start;
-                                *pause_start = None;
-                            },
-                            None => panic!("Game already running!"),
-                        }
-                    },
-                    _ => panic!("No game to resume!"),
-                }
-            },
-            AppTransition::None => (),
-        }
+            None => GameController::Closed(ClosedGameController { game_data: &mut self.game_data })
+        };
+        let application_controller = ApplicationController {
+            game_controller,
+            closing: &mut self.closing,
+        };
+        self.application.handle_event(event, application_controller)
     }
 
     fn handle_event(&mut self, event: WinitEvent<()>) {
@@ -386,13 +419,16 @@ mod tests {
     use strum_macros::EnumString;
     use strum_macros::ToString;
 
-    use crate::{Application, VirtualKeyCode, GameInfo, GraphicsInfo};
-    use crate::AppTransition;
+    use crate::Application;
+    use crate::ApplicationController;
+    use crate::VirtualKeyCode;
+    use crate::GameController;
+    use crate::GraphicsInfo;
     use crate::run_application;
     use crate::GameStatus;
+    use crate::GameInfo;
     use crate::FireTrigger;
     use crate::HoldableTrigger;
-    use crate::ValueTrigger;
     use crate::ControlBind;
     use crate::ControlEvent;
     use crate::Game;
@@ -548,47 +584,40 @@ mod tests {
         fn handle_event(
             &mut self,
             event: Event<FireTarget, SwitchTarget, ValueTarget>,
-            game_info: Option<GameInfo<Self::G>>
-        ) -> AppTransition<TestGame> {
+            controller: ApplicationController<Self>,
+        ) {
             match event {
                 Event::ControlEvent(ce) => match ce {
                     ControlEvent::Fire(FireTarget::StartGame) => {
-                        if game_info.is_none() {
-                            AppTransition::NewSinglePlayer(TestGame {
+                        if let GameController::Closed(c) = controller.game_controller {
+                            c.start_new(TestGame {
                                 cube_rotation: 0.0,
                                 num_updates: 0,
-                            })
-                        } else {
-                            AppTransition::None
+                            });
                         }
                     },
                     ControlEvent::Fire(FireTarget::EndGame) => {
-                        if game_info.is_some() {
-                            AppTransition::CloseSinglePlayer
-                        } else {
-                            AppTransition::None
+                        if let GameController::Running(c) = controller.game_controller {
+                            c.close();
+                        } else if let GameController::Paused(c) = controller.game_controller {
+                            c.close();
                         }
                     },
                     ControlEvent::Fire(FireTarget::ToggleGamePause) => {
-                        if let Some(GameInfo { game: _, paused, ended: false }) = game_info {
-                            if paused {
-                                AppTransition::ResumeSinglePlayer
-                            } else {
-                                AppTransition::PauseSinglePlayer
-                            }
-                        } else {
-                            AppTransition::None
+                        if let GameController::Running(c) = controller.game_controller {
+                            c.pause();
+                        } else if let GameController::Paused(c) = controller.game_controller {
+                            c.resume();
                         }
                     },
-                    ControlEvent::Switch { .. } => AppTransition::None,
-                    ControlEvent::Value { .. } => AppTransition::None,
+                    ControlEvent::Switch { .. } => (),
+                    ControlEvent::Value { .. } => (),
                 },
-                Event::GameUpdated => AppTransition::None,
+                Event::GameUpdated => (),
                 Event::WindowFocusChanged(focus) => {
                     println!("focus: {}", focus);
-                    AppTransition::None
                 },
-                Event::CloseRequested => AppTransition::CloseApplication,
+                Event::CloseRequested => controller.close(),
             }
         }
 
