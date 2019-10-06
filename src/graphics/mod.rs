@@ -19,7 +19,7 @@ use glium_text::FontTexture;
 
 use self::create::SceneObjectCreator;
 use self::render::SceneRenderer;
-use crate::GameInfo;
+use crate::{GameInfo, GraphicsInfo};
 
 const VERTEX_SHADER_SOURCE: &'static str = include_str!("../../shader_src/vertex_shader.vert");
 const FRAGMENT_SHADER_SOURCE: &'static str = include_str!("../../shader_src/fragment_shader.frag");
@@ -108,7 +108,8 @@ impl Graphics {
     pub fn render<A: super::Application>(
         &mut self,
         application: &A,
-        game_info: Option<GameInfo<A::G>>
+        game_info: Option<GameInfo<A::G>>,
+        graphics_info: GraphicsInfo,
     ) {
         // create new frame
         let mut frame = self.display.draw();
@@ -126,7 +127,7 @@ impl Graphics {
         );
 
         // let the game render the scene via the renderer
-        application.render(game_info, scene_renderer);
+        application.render(game_info, graphics_info, scene_renderer);
 
         // swap buffers
         frame.finish().unwrap(); // TODO maybe not unwrap?

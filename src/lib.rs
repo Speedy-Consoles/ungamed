@@ -73,7 +73,12 @@ pub trait Application {
         event: Event<Self::FireTarget, Self::SwitchTarget, Self::ValueTarget>,
         game_info: Option<GameInfo<Self::G>>,
     ) -> AppTransition<Self::G>;
-    fn render(&self, game: Option<GameInfo<Self::G>>, renderer: SceneRenderer);
+    fn render(
+        &self,
+        game: Option<GameInfo<Self::G>>,
+        graphics_info: GraphicsInfo,
+        renderer: SceneRenderer
+    );
 }
 
 #[derive(Copy, Clone)]
@@ -87,9 +92,13 @@ pub trait Game {
 }
 
 pub struct GameInfo<'a, G: Game> {
-    game: &'a G,
-    paused: bool,
-    ended: bool,
+    pub game: &'a G,
+    pub paused: bool,
+    pub ended: bool,
+}
+
+pub struct GraphicsInfo {
+    pub fps: f32,
 }
 
 struct GameData<G: Game> {
@@ -144,6 +153,8 @@ struct GraphicsData {
     num_renders: u64,
     render_rate: u32,
     render_phase: Duration,
+    last_render: Instant,
+    fps: f32,
 }
 
 impl GraphicsData {
@@ -155,16 +166,16 @@ impl GraphicsData {
         let next_render_time = self.next_render_time();
         let now = Instant::now();
         if now >= next_render_time {
-            eprintln!("{:?}", now - next_render_time);
+            // TODO adapt render_phase and render_rate properly
             let start = Instant::now();
-            self.graphics.render(application, game_info);
+            self.graphics.render(application, game_info, self.graphics_info());
             let render_duration = Instant::now() - start;
             if render_duration > Duration::from_millis(10) {
                 self.render_phase += render_duration - Duration::from_millis(3);
             }
-            eprintln!("render_duration: {:?}", render_duration);
+            self.fps = self.fps * 0.95 + 0.05 / (now - self.last_render).as_secs_f32();
+            self.last_render = now;
             self.num_renders += 1;
-            // TODO adapt render_phase and render_rate
             return true;
         }
         return false;
@@ -176,6 +187,12 @@ impl GraphicsData {
             self.num_renders,
             self.render_rate
         )
+    }
+
+    fn graphics_info(&self) -> GraphicsInfo {
+        GraphicsInfo {
+            fps: self.fps,
+        }
     }
 }
 
@@ -304,6 +321,7 @@ pub fn run_application<A: Application + 'static>() -> ! {
     let mut controls = Controls::new();
     let application = A::new(graphics.object_creator(), &mut binds);
     binds.into_iter().for_each(|bind| controls.add_bind(bind));
+    let render_rate = 60;
     let mut engine = Engine {
         application,
         controls,
@@ -311,8 +329,10 @@ pub fn run_application<A: Application + 'static>() -> ! {
             graphics,
             render_ref_time: Instant::now(),
             num_renders: 0,
-            render_rate: 60,
+            render_rate: render_rate,
             render_phase: Duration::from_secs(0),
+            last_render: Instant::now() - Duration::from_secs(1) / render_rate,
+            fps: 0.0
         },
         game_data: None,
         closing: false,
@@ -366,7 +386,7 @@ mod tests {
     use strum_macros::EnumString;
     use strum_macros::ToString;
 
-    use crate::{Application, VirtualKeyCode, GameInfo};
+    use crate::{Application, VirtualKeyCode, GameInfo, GraphicsInfo};
     use crate::AppTransition;
     use crate::run_application;
     use crate::GameStatus;
@@ -391,7 +411,7 @@ mod tests {
     use crate::Texture2d;
     use crate::TEXT_NUM_LINES;
 
-    const NUM_TICKS: u64 = 131;
+    //const NUM_TICKS: u64 = 131;
     //const TICK_RATE: u32 = 50;
 
     #[derive(Copy, Clone, Debug, PartialEq, Eq, Hash, ToString, EnumString)]
@@ -572,7 +592,12 @@ mod tests {
             }
         }
 
-        fn render(&self, game_info: Option<GameInfo<TestGame>>, renderer: SceneRenderer) {
+        fn render(
+            &self,
+            game_info: Option<GameInfo<TestGame>>,
+            graphics_info: GraphicsInfo,
+            renderer: SceneRenderer
+        ) {
             let mut renderer = renderer.start_object_rendering(&Default::default());
             if let Some(GameInfo { game, paused: _, ended: false }) = game_info {
                 renderer.draw_textured(
@@ -587,7 +612,8 @@ mod tests {
                 renderer.draw_textureless(&self.textureless_cube, Color::green(), &y_cube);
                 renderer.draw_textureless(&self.textureless_cube, Color::blue(), &z_cube);
                 let mut renderer = renderer.start_text_rendering();
-                for i in 0..TEXT_NUM_LINES {
+                renderer.draw_text(0, &format!("FPS: {:.0}", graphics_info.fps));
+                for i in 1..TEXT_NUM_LINES {
                     renderer.draw_text(i, &format!("line {}", i));
                 }
                 self.num_renders.set(self.num_renders.get() + 1);
