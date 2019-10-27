@@ -4,11 +4,15 @@ use std::time::Instant;
 use std::time::Duration;
 use std::hash::Hash;
 use std::str::FromStr;
+use std::collections::vec_deque::VecDeque;
 
 use glium::glutin::event::Event as WinitEvent;
 use glium::glutin::event_loop::EventLoop;
 use glium::glutin::event::WindowEvent;
 use glium::glutin::event_loop::ControlFlow;
+use glium::glutin::window::Window;
+use glium::glutin::dpi::LogicalPosition;
+use glium::Display;
 
 use controls::Controls;
 use self::graphics::Graphics;
@@ -36,7 +40,6 @@ pub use self::graphics::render::SceneObjectRenderer;
 pub use self::graphics::render::Projection;
 pub use self::graphics::render::Camera;
 pub use self::graphics::render::TEXT_NUM_LINES;
-use std::collections::vec_deque::VecDeque;
 
 #[derive(Debug)]
 pub enum Event<FireTarget, SwitchTarget, ValueTarget> {
@@ -44,6 +47,7 @@ pub enum Event<FireTarget, SwitchTarget, ValueTarget> {
     WindowFocusChanged(bool),
     CloseRequested,
     GameUpdated,
+    CursorMoved,
 }
 
 pub trait Application {
@@ -84,8 +88,9 @@ pub trait Game {
 }
 
 pub struct ApplicationController<'a, A: ?Sized + Application> {
-    closing: &'a mut bool,
     pub game_controller: GameController<'a, A::G>,
+    pub cursor_controller: CursorController<'a>,
+    closing: &'a mut bool,
 }
 
 impl<'a, A: Application> ApplicationController<'a, A> {
@@ -170,6 +175,102 @@ pub enum GameController<'a, G: Game> {
     Closed(ClosedGameController<'a, G>),
 }
 
+pub struct FreeCursorController<'a> {
+    cursor_data: &'a mut CursorData,
+    window: &'a Window,
+}
+
+impl<'a> FreeCursorController<'a> {
+    pub fn position(&self) -> (f64, f64) { // TODO should this be relative to window size?
+        (self.cursor_data.pos.x, self.cursor_data.pos.y)
+    }
+
+    pub fn capture(self) -> CapturedCursorController<'a> {
+        self.window.set_cursor_grab(true).ok(); // TODO what to do on error?
+        self.cursor_data.mode = CursorMode::Captured;
+        CapturedCursorController {
+            cursor_data: self.cursor_data,
+            window: self.window,
+        }
+    }
+
+    pub fn hide(self) -> HiddenCursorController<'a> {
+        self.window.set_cursor_visible(false);
+        self.window.set_cursor_grab(true).ok(); // TODO what to do on error?
+        self.cursor_data.mode = CursorMode::Hidden;
+        HiddenCursorController {
+            cursor_data: self.cursor_data,
+            window: self.window,
+        }
+    }
+}
+
+pub struct CapturedCursorController<'a> {
+    cursor_data: &'a mut CursorData,
+    window: &'a Window,
+}
+
+impl<'a> CapturedCursorController<'a> {
+    pub fn position(&self) -> (f64, f64) { // TODO should this be relative to window size?
+        (self.cursor_data.pos.x, self.cursor_data.pos.y)
+    }
+
+    pub fn free(self) -> FreeCursorController<'a> {
+        self.window.set_cursor_visible(true);
+        self.window.set_cursor_grab(false).ok(); // TODO what to do on error?
+        self.cursor_data.mode = CursorMode::Normal;
+        FreeCursorController {
+            cursor_data: self.cursor_data,
+            window: self.window,
+        }
+    }
+
+    pub fn hide(self) -> HiddenCursorController<'a> {
+        self.window.set_cursor_visible(false);
+        self.window.set_cursor_grab(true).ok(); // TODO what to do on error?
+        self.cursor_data.mode = CursorMode::Hidden;
+        HiddenCursorController {
+            cursor_data: self.cursor_data,
+            window: self.window,
+        }
+    }
+}
+
+pub struct HiddenCursorController<'a> {
+    cursor_data: &'a mut CursorData,
+    window: &'a Window,
+}
+
+impl<'a> HiddenCursorController<'a> {
+    pub fn show(self) -> FreeCursorController<'a> {
+        self.window.set_cursor_visible(true);
+        self.window.set_cursor_grab(false).ok(); // TODO what to do on error?
+        self.window.set_cursor_position(self.cursor_data.pos).ok(); // TODO what to do on error?
+        self.cursor_data.mode = CursorMode::Normal;
+        FreeCursorController {
+            cursor_data: self.cursor_data,
+            window: self.window,
+        }
+    }
+
+    pub fn show_captured(self) -> CapturedCursorController<'a> {
+        self.window.set_cursor_visible(true);
+        self.window.set_cursor_grab(true).ok(); // TODO what to do on error?
+        self.window.set_cursor_position(self.cursor_data.pos).ok(); // TODO what to do on error?
+        self.cursor_data.mode = CursorMode::Captured;
+        CapturedCursorController {
+            cursor_data: self.cursor_data,
+            window: self.window,
+        }
+    }
+}
+
+pub enum CursorController<'a> {
+    Free(FreeCursorController<'a>),
+    Captured(CapturedCursorController<'a>),
+    Hidden(HiddenCursorController<'a>),
+}
+
 pub struct GraphicsInfo {
     pub fps: f32,
 }
@@ -231,6 +332,7 @@ impl GraphicsData {
     fn maybe_render<A: Application>(
         &mut self,
         application: &A,
+        display: &Display,
         game_info: Option<GameInfo<A::G>>,
     ) -> bool {
         let next_render_time = self.next_render_time();
@@ -238,7 +340,7 @@ impl GraphicsData {
         if now >= next_render_time {
             // TODO adapt render_phase and render_rate properly
             let start = Instant::now();
-            self.graphics.render(application, game_info, self.graphics_info());
+            self.graphics.render(application, display, game_info, self.graphics_info());
             let render_duration = Instant::now() - start;
             if render_duration > Duration::from_millis(10) {
                 self.render_phase += render_duration - Duration::from_millis(3);
@@ -266,11 +368,25 @@ impl GraphicsData {
     }
 }
 
+#[derive(Eq, PartialEq)]
+enum CursorMode {
+    Normal,
+    Captured,
+    Hidden,
+}
+
+struct CursorData {
+    pos: LogicalPosition,
+    mode: CursorMode,
+}
+
 struct Engine<A: Application> {
     application: A,
+    display: Display,
     controls: Controls<A::FireTarget, A::SwitchTarget, A::ValueTarget>,
     game_data: Option<GameData<A::G>>,
     graphics_data: GraphicsData,
+    cursor_data: CursorData,
     closing: bool,
 }
 
@@ -291,28 +407,72 @@ impl<A: Application> Engine<A> {
             },
             None => GameController::Closed(ClosedGameController { game_data: &mut self.game_data })
         };
+        let gl_window = self.display.gl_window();
+        let cursor_controller = match self.cursor_data.mode {
+            CursorMode::Normal => CursorController::Free(FreeCursorController {
+                cursor_data: &mut self.cursor_data,
+                window: gl_window.window(),
+            }),
+            CursorMode::Captured => CursorController::Captured(CapturedCursorController {
+                cursor_data: &mut self.cursor_data,
+                window: gl_window.window(),
+            }),
+            CursorMode::Hidden => CursorController::Hidden(HiddenCursorController {
+                cursor_data: &mut self.cursor_data,
+                window: gl_window.window(),
+            }),
+        };
         let application_controller = ApplicationController {
             game_controller,
+            cursor_controller,
             closing: &mut self.closing,
         };
         self.application.handle_event(event, application_controller)
     }
 
     fn handle_event(&mut self, event: WinitEvent<()>) {
+        let my_window_id = self.display.gl_window().window().id();
         match event {
-            WinitEvent::WindowEvent { event: WindowEvent::Resized(size), .. } => {
-                self.graphics_data.graphics.set_view_port_size(size);
-            },
-            WinitEvent::WindowEvent { event: WindowEvent::CloseRequested, .. } => {
-                self.emit_event(Event::CloseRequested);
-            },
-            WinitEvent::WindowEvent { event: WindowEvent::Focused(focused), .. } => {
-                self.emit_event(Event::WindowFocusChanged(focused));
+            WinitEvent::WindowEvent { event: we, window_id } => {
+                if window_id == my_window_id {
+                    match we {
+                        WindowEvent::Resized(size) => {
+                            self.graphics_data.graphics.set_view_port_size(size);
+                        },
+                        WindowEvent::CloseRequested => {
+                            self.emit_event(Event::CloseRequested);
+                        },
+                        WindowEvent::Focused(focused) => {
+                            self.emit_event(Event::WindowFocusChanged(focused));
+                        },
+                        WindowEvent::Moved(_) => (),
+                        WindowEvent::AxisMotion { .. } => (),
+                        WindowEvent::CursorMoved { position, .. } => {
+                            if self.cursor_data.mode != CursorMode::Hidden {
+                                let old_pos = self.cursor_data.pos;
+                                self.cursor_data.pos = position;
+                                if self.cursor_data.pos != old_pos {
+                                    self.emit_event(Event::CursorMoved);
+                                }
+                            }
+                        },
+                        WindowEvent::CursorEntered { .. } => (),
+                        WindowEvent::CursorLeft { .. } => (),
+                        _ => eprintln!("{:?}", we), // TODO
+                    }
+                } else {
+                    eprintln!("wrong window ({:?}): {:?}", window_id, we);
+                }
             },
             WinitEvent::DeviceEvent { event, device_id } => {
                 self.controls.process(device_id, event);
             },
-            _ => ()//eprintln!("{:?}", event),
+            WinitEvent::UserEvent(_) => (), // TODO
+            WinitEvent::NewEvents(_) => (),
+            WinitEvent::EventsCleared => (),
+            WinitEvent::LoopDestroyed => (),
+            WinitEvent::Suspended => (),
+            WinitEvent::Resumed => (),
         }
     }
 
@@ -331,6 +491,7 @@ impl<A: Application> Engine<A> {
     fn maybe_render(&mut self) -> Instant {
         self.graphics_data.maybe_render(
             &self.application,
+            &self.display,
             self.game_data.as_ref().map(|gd| gd.game_info())
         );
         return self.graphics_data.next_render_time();
@@ -344,30 +505,35 @@ fn next_tick_time(ref_time: Instant, num_ticks: u64, tick_rate: u32) -> Instant 
 pub fn run_application<A: Application + 'static>() -> ! {
     // creating structures
     let event_loop = EventLoop::new();
-    let window = glium::glutin::window::WindowBuilder::new()
+    let window_builder = glium::glutin::window::WindowBuilder::new()
         .with_inner_size(A::optimal_window_size())
         .with_title(A::title());
     let context = glium::glutin::ContextBuilder::new();
-    let display = glium::Display::new(window, context, &event_loop).unwrap();
+    let display = Display::new(window_builder, context, &event_loop).unwrap(); // TODO maybe not unwrap
     let mut binds = Vec::new();
-    let mut graphics = Graphics::new(display, A::optimal_window_size());
+    let mut graphics = Graphics::new(&display, A::optimal_window_size());
     let mut controls = Controls::new();
-    let application = A::new(graphics.object_creator(), &mut binds);
+    let application = A::new(graphics.object_creator(&display), &mut binds);
     binds.into_iter().for_each(|bind| controls.add_bind(bind));
     let render_rate = 60;
     let mut engine = Engine {
         application,
+        display,
         controls,
+        game_data: None,
         graphics_data: GraphicsData {
             graphics,
             render_ref_time: Instant::now(),
             num_renders: 0,
-            render_rate: render_rate,
+            render_rate,
             render_phase: Duration::from_secs(0),
             last_render: Instant::now() - Duration::from_secs(1) / render_rate,
             fps: 0.0
         },
-        game_data: None,
+        cursor_data: CursorData {
+            pos: LogicalPosition::new(0.0, 0.0),
+            mode: CursorMode::Normal,
+        },
         closing: false,
     };
 
@@ -420,6 +586,7 @@ mod tests {
     use strum_macros::ToString;
 
     use crate::Application;
+    use crate::CursorController;
     use crate::ApplicationController;
     use crate::VirtualKeyCode;
     use crate::GameController;
@@ -447,7 +614,7 @@ mod tests {
     use crate::Texture2d;
     use crate::TEXT_NUM_LINES;
 
-    //const NUM_TICKS: u64 = 131;
+    const NUM_TICKS: u64 = 131;
     //const TICK_RATE: u32 = 50;
 
     #[derive(Copy, Clone, Debug, PartialEq, Eq, Hash, ToString, EnumString)]
@@ -455,6 +622,9 @@ mod tests {
         StartGame,
         EndGame,
         ToggleGamePause,
+        FreeCursor,
+        CaptureCursor,
+        HideCursor,
     }
 
     #[derive(Copy, Clone, Debug, PartialEq, Eq, Hash, ToString, EnumString)]
@@ -481,7 +651,11 @@ mod tests {
         fn update(&mut self) -> GameStatus {
             self.cube_rotation += 0.05;
             self.num_updates += 1;
-            GameStatus::Running
+            if self.num_updates >= NUM_TICKS {
+                GameStatus::Ended
+            } else {
+                GameStatus::Running
+            }
         }
     }
 
@@ -514,6 +688,9 @@ mod tests {
             binds.push(ControlBind::Fire(FireTrigger::Holdable(HoldableTrigger::Button(1)), FireTarget::StartGame));
             binds.push(ControlBind::Fire(FireTrigger::Holdable(HoldableTrigger::Button(3)), FireTarget::EndGame));
             binds.push(ControlBind::Fire(FireTrigger::Holdable(HoldableTrigger::KeyCode(VirtualKeyCode::Space)), FireTarget::ToggleGamePause));
+            binds.push(ControlBind::Fire(FireTrigger::Holdable(HoldableTrigger::KeyCode(VirtualKeyCode::F)), FireTarget::FreeCursor));
+            binds.push(ControlBind::Fire(FireTrigger::Holdable(HoldableTrigger::KeyCode(VirtualKeyCode::C)), FireTarget::CaptureCursor));
+            binds.push(ControlBind::Fire(FireTrigger::Holdable(HoldableTrigger::KeyCode(VirtualKeyCode::H)), FireTarget::HideCursor));
 
             let textured_vertices = [
                 (Vector3::new(-0.5, -0.5,  0.5), Vector2::new(0.0, 0.0)),
@@ -610,12 +787,43 @@ mod tests {
                             c.resume();
                         }
                     },
+                    ControlEvent::Fire(FireTarget::FreeCursor) => {
+                        match controller.cursor_controller {
+                            CursorController::Captured(cc) => { cc.free(); },
+                            CursorController::Hidden(cc) => { cc.show(); },
+                            _ => (),
+                        }
+                    },
+                    ControlEvent::Fire(FireTarget::CaptureCursor) => {
+                        match controller.cursor_controller {
+                            CursorController::Free(cc) => { cc.capture(); },
+                            CursorController::Hidden(cc) => { cc.show_captured(); },
+                            _ => (),
+                        }
+                    },
+                    ControlEvent::Fire(FireTarget::HideCursor) => {
+                        match controller.cursor_controller {
+                            CursorController::Free(cc) => { cc.hide(); },
+                            CursorController::Captured(cc) => { cc.hide(); },
+                            _ => (),
+                        }
+                    },
                     ControlEvent::Switch { .. } => (),
                     ControlEvent::Value { .. } => (),
                 },
                 Event::GameUpdated => (),
+                Event::CursorMoved => {
+                    let position = match controller.cursor_controller {
+                        CursorController::Free(cc) => Some(cc.position()),
+                        CursorController::Captured(cc) => Some(cc.position()),
+                        CursorController::Hidden(_) => None,
+                    };
+                    if let Some(p) = position {
+                        eprintln!("cursor moved: {:.1}, {:.1}", p.0, p.1);
+                    }
+                },
                 Event::WindowFocusChanged(focus) => {
-                    println!("focus: {}", focus);
+                    eprintln!("focus: {}", focus);
                 },
                 Event::CloseRequested => controller.close(),
             }

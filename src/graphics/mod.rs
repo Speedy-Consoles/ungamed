@@ -48,7 +48,6 @@ pub struct TexturedSceneObject {
 }
 
 pub struct Graphics {
-    display: Display,
     program: Program,
     draw_parameters: DrawParameters<'static>,
     screen_ratio: f64,
@@ -59,10 +58,10 @@ pub struct Graphics {
 }
 
 impl Graphics {
-    pub fn new(display: Display, optimal_window_size: LogicalSize) -> Self {
+    pub fn new(display: &Display, optimal_window_size: LogicalSize) -> Self {
         // load shader sources and create program
         let program = glium::Program::from_source(
-            &display,
+            display,
             VERTEX_SHADER_SOURCE,
             FRAGMENT_SHADER_SOURCE,
             Some(GEOMETRY_SHADER_SOURCE),
@@ -87,16 +86,15 @@ impl Graphics {
 
         // load font and create text system
         let font_file = include_bytes!("../../font/DejaVuSansMono.ttf");
-        let font = FontTexture::new(&display, font_file.as_ref(), TEXT_FONT_SIZE).unwrap();
-        let text_system = TextSystem::new(&display);
+        let font = FontTexture::new(display, font_file.as_ref(), TEXT_FONT_SIZE).unwrap();
+        let text_system = TextSystem::new(display);
         let text_display = TextDisplay::new(&text_system, Box::new(font), "");
 
         // create an empty texture
-        let white_texture = Texture2d::new(&display, vec![vec![(1.0, 1.0, 1.0, 1.0)]]).unwrap();
+        let white_texture = Texture2d::new(display, vec![vec![(1.0, 1.0, 1.0, 1.0)]]).unwrap();
 
         // create the graphics
         Graphics {
-            display,
             program,
             draw_parameters,
             screen_ratio: optimal_screen_ratio, // TODO this is ugly
@@ -110,11 +108,12 @@ impl Graphics {
     pub fn render<A: super::Application>(
         &mut self,
         application: &A,
+        display: &Display,
         game_info: Option<GameInfo<A::G>>,
         graphics_info: GraphicsInfo,
     ) {
         // create new frame
-        let mut frame = self.display.draw();
+        let mut frame = display.draw();
 
         // create the renderer
         let scene_renderer = SceneRenderer::new(
@@ -144,8 +143,8 @@ impl Graphics {
         }
     }
 
-    pub fn object_creator(&mut self) -> SceneObjectCreator {
+    pub fn object_creator<'a>(&mut self, display: &'a Display) -> SceneObjectCreator<'a> {
         // give out scene object creator for the constructor of the game
-        SceneObjectCreator::new(&self.display)
+        SceneObjectCreator::new(display)
     }
 }
