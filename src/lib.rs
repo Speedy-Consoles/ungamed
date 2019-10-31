@@ -31,8 +31,10 @@ pub use image;
 pub use glium::glutin::dpi::LogicalSize;
 pub use glium::texture::Texture2d;
 pub use self::graphics::color::Color;
-pub use self::graphics::TexturelessSceneObject;
-pub use self::graphics::TexturedSceneObject;
+pub use self::graphics::TexturelessSceneObject3d;
+pub use self::graphics::TexturedSceneObject3d;
+pub use self::graphics::TexturelessSceneObject2d;
+pub use self::graphics::TexturedSceneObject2d;
 pub use self::graphics::create::SceneObjectCreator;
 pub use self::graphics::render::SceneSettings;
 pub use self::graphics::render::SceneRenderer;
@@ -581,6 +583,7 @@ mod tests {
     //use std::time::Duration;
     use std::cell::Cell;
     use std::io::Cursor;
+    use std::rc::Rc;
 
     use strum_macros::EnumString;
     use strum_macros::ToString;
@@ -604,11 +607,14 @@ mod tests {
     use crate::Color;
     use crate::SceneObjectCreator;
     use crate::SceneRenderer;
-    use crate::TexturelessSceneObject;
-    use crate::TexturedSceneObject;
+    use crate::TexturelessSceneObject3d;
+    use crate::TexturedSceneObject3d;
+    use crate::TexturelessSceneObject2d;
+    use crate::TexturedSceneObject2d;
     use crate::cgmath::Vector3;
     use crate::cgmath::Vector2;
     use crate::cgmath::Matrix4;
+    use crate::cgmath::Matrix3;
     use crate::cgmath::Rad;
     use crate::ValueTargetTrait;
     use crate::Texture2d;
@@ -660,9 +666,10 @@ mod tests {
     }
 
     struct TestApplication {
-        textured_cube: TexturedSceneObject,
-        textureless_cube: TexturelessSceneObject,
-        cube_texture: Texture2d,
+        textured_cube: TexturedSceneObject3d<Rc<Texture2d>>,
+        textureless_cube: TexturelessSceneObject3d,
+        textured_square: TexturedSceneObject2d<Rc<Texture2d>>,
+        textureless_square: TexturelessSceneObject2d,
         num_renders: Cell<u64>,
     }
 
@@ -677,7 +684,7 @@ mod tests {
         }
 
         fn optimal_window_size() -> LogicalSize {
-            LogicalSize::new(50.0, 50.0)
+            LogicalSize::new(160.0, 90.0)
         }
 
         fn new(
@@ -692,7 +699,7 @@ mod tests {
             binds.push(ControlBind::Fire(FireTrigger::Holdable(HoldableTrigger::KeyCode(VirtualKeyCode::C)), FireTarget::CaptureCursor));
             binds.push(ControlBind::Fire(FireTrigger::Holdable(HoldableTrigger::KeyCode(VirtualKeyCode::H)), FireTarget::HideCursor));
 
-            let textured_vertices = [
+            let textured_cube_vertices = [
                 (Vector3::new(-0.5, -0.5,  0.5), Vector2::new(0.0, 0.0)),
                 (Vector3::new( 0.5, -0.5,  0.5), Vector2::new(1.0, 0.0)),
                 (Vector3::new(-0.5,  0.5,  0.5), Vector2::new(0.0, 1.0)),
@@ -724,10 +731,10 @@ mod tests {
                 (Vector3::new( 0.5,  0.5,  0.5), Vector2::new(1.0, 1.0)),
             ];
 
-            let textureless_vertices: Vec<Vector3<f32>>
-                = textured_vertices.iter().map(|&(p, _)| p).collect();
+            let textureless_cube_vertices: Vec<Vector3<f32>>
+                = textured_cube_vertices.iter().map(|p| p.0).collect();
 
-            let indices = [
+            let cube_indices = [
                  0,  1,  3,   0,  3,  2,
                  4,  5,  7,   4,  7,  6,
                  8,  9, 11,   8, 11, 10,
@@ -736,24 +743,51 @@ mod tests {
                 20, 21, 23,  20, 23, 22,
             ];
 
-            let cube_texture = scene_object_creator.create_texture(image::load(
+            let texture = Rc::new(scene_object_creator.create_texture(image::load(
                 Cursor::new(&include_bytes!("../images/test_image.png")[..]),
                 image::PNG,
-            ).unwrap());
+            ).unwrap()));
 
-            let textured_cube = scene_object_creator.create_textured(
-                &textured_vertices,
-                &indices
+            let textured_cube = scene_object_creator.create_textured3d(
+                &textured_cube_vertices,
+                &cube_indices,
+                texture.clone(),
             );
-            let textureless_cube = scene_object_creator.create_textureless(
-                textureless_vertices.as_ref(),
-                &indices
+            let textureless_cube = scene_object_creator.create_textureless3d(
+                textureless_cube_vertices.as_ref(),
+                &cube_indices
+            );
+
+            let textured_square_vertices = [
+                (Vector2::new(-0.5, -0.5), Vector2::new(0.0, 0.0)),
+                (Vector2::new( 0.5, -0.5), Vector2::new(1.0, 0.0)),
+                (Vector2::new(-0.5,  0.5), Vector2::new(0.0, 1.0)),
+                (Vector2::new( 0.5,  0.5), Vector2::new(1.0, 1.0)),
+            ];
+
+            let textureless_square_vertices: Vec<Vector2<f32>>
+                = textured_square_vertices.iter().map(|p| p.0).collect();
+
+            let square_indices = [
+                0, 1, 3,
+                0, 3, 2,
+            ];
+
+            let textured_square = scene_object_creator.create_textured2d(
+                &textured_square_vertices,
+                &square_indices,
+                texture,
+            );
+            let textureless_square = scene_object_creator.create_textureless2d(
+                textureless_square_vertices.as_ref(),
+                &square_indices
             );
 
             TestApplication {
                 textured_cube,
                 textureless_cube,
-                cube_texture,
+                textured_square,
+                textureless_square,
                 num_renders: Cell::new(0),
             }
         }
@@ -835,26 +869,53 @@ mod tests {
             graphics_info: GraphicsInfo,
             renderer: SceneRenderer
         ) {
-            let mut renderer = renderer.start_object_rendering(&Default::default());
+            let mut object_renderer = renderer.start_object_rendering(&Default::default());
+            let mut overlay_renderer;
             if let Some(GameInfo { game, paused: _, ended: false }) = game_info {
-                renderer.draw_textured(
+                object_renderer.draw_textured(
                     &self.textured_cube,
-                    &self.cube_texture,
                     &Matrix4::from_angle_z(Rad(game.cube_rotation)),
                 );
                 let x_cube = Matrix4::from_translation(Vector3::unit_x()) * Matrix4::from_scale(0.05);
                 let z_cube = Matrix4::from_translation(Vector3::unit_y()) * Matrix4::from_scale(0.2);
                 let y_cube = Matrix4::from_translation(Vector3::unit_z()) * Matrix4::from_scale(0.5);
-                renderer.draw_textureless(&self.textureless_cube, Color::red(), &x_cube);
-                renderer.draw_textureless(&self.textureless_cube, Color::green(), &y_cube);
-                renderer.draw_textureless(&self.textureless_cube, Color::blue(), &z_cube);
-                let mut renderer = renderer.start_text_rendering();
-                renderer.draw_text(0, &format!("FPS: {:.0}", graphics_info.fps));
-                for i in 1..TEXT_NUM_LINES {
-                    renderer.draw_text(i, &format!("line {}", i));
-                }
-                self.num_renders.set(self.num_renders.get() + 1);
+                object_renderer.draw_textureless(&self.textureless_cube, Color::red(), &x_cube);
+                object_renderer.draw_textureless(&self.textureless_cube, Color::green(), &y_cube);
+                object_renderer.draw_textureless(&self.textureless_cube, Color::blue(), &z_cube);
+
+                overlay_renderer = object_renderer.start_overlay_rendering();
+                let square1 = Matrix3::new(
+                    4.0, 0.0, 0.0,
+                    0.0, 4.0, 0.0,
+                    5.0, 5.0, 1.0f32,
+                );
+                let square2 = Matrix3::new(
+                      4.0, 0.0, 0.0,
+                      0.0, 4.0, 0.0,
+                    155.0, 5.0, 1.0f32,
+                );
+                let square3 = Matrix3::new(
+                    4.0,  0.0, 0.0,
+                    0.0,  4.0, 0.0,
+                    5.0, 85.0, 1.0f32,
+                );
+                let square4 = Matrix3::new(
+                      4.0,  0.0, 0.0,
+                      0.0,  4.0, 0.0,
+                    155.0, 85.0, 1.0f32,
+                );
+                overlay_renderer.draw_textureless(&self.textureless_square, Color::black(), &square1);
+                overlay_renderer.draw_textured(&self.textured_square, &square2);
+                overlay_renderer.draw_textured(&self.textured_square, &square3);
+                overlay_renderer.draw_textureless(&self.textureless_square, Color::black(), &square4);
+            } else {
+                overlay_renderer = object_renderer.start_overlay_rendering();
             }
+            overlay_renderer.draw_text(0, &format!("FPS: {:.0}", graphics_info.fps));
+            for i in 1..TEXT_NUM_LINES {
+                overlay_renderer.draw_text(i, &format!("line {}", i));
+            }
+            self.num_renders.set(self.num_renders.get() + 1);
         }
     }
 

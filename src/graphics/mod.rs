@@ -2,6 +2,8 @@ pub mod render;
 pub mod create;
 pub mod color;
 
+use std::ops::Deref;
+
 use glium::Display;
 use glium::DrawParameters;
 use glium::Blend;
@@ -23,48 +25,78 @@ use crate::GraphicsInfo;
 use self::create::SceneObjectCreator;
 use self::render::SceneRenderer;
 
-const VERTEX_SHADER_SOURCE: &'static str = include_str!("../../shader_src/vertex_shader.vert");
-const FRAGMENT_SHADER_SOURCE: &'static str = include_str!("../../shader_src/fragment_shader.frag");
-const GEOMETRY_SHADER_SOURCE: &'static str = include_str!("../../shader_src/geometry_shader.geo");
+const WORLD_VERTEX_SHADER_SOURCE: &'static str = include_str!("../../shader_src/world/vertex_shader.vert");
+const WORLD_FRAGMENT_SHADER_SOURCE: &'static str = include_str!("../../shader_src/world/fragment_shader.frag");
+const WORLD_GEOMETRY_SHADER_SOURCE: &'static str = include_str!("../../shader_src/world/geometry_shader.geo");
+
+const OVERLAY_VERTEX_SHADER_SOURCE: &'static str = include_str!("../../shader_src/overlay/vertex_shader.vert");
+const OVERLAY_FRAGMENT_SHADER_SOURCE: &'static str = include_str!("../../shader_src/overlay/fragment_shader.frag");
+const OVERLAY_GEOMETRY_SHADER_SOURCE: &'static str = include_str!("../../shader_src/overlay/geometry_shader.geo");
 
 const TEXT_FONT_SIZE: u32 = 20;
 
 #[derive(Copy, Clone)]
-pub struct Vertex {
+pub struct Vertex3d {
     position: [f32; 3],
     texture_position: [f32; 2],
 }
+implement_vertex!(Vertex3d, position, texture_position);
 
-implement_vertex!(Vertex, position, texture_position);
+#[derive(Copy, Clone)]
+pub struct Vertex2d {
+    position: [f32; 2],
+    texture_position: [f32; 2],
+}
+implement_vertex!(Vertex2d, position, texture_position);
 
-pub struct TexturelessSceneObject {
-    vertex_buffer: VertexBuffer<Vertex>,
+pub struct TexturelessSceneObject3d {
+    vertex_buffer: VertexBuffer<Vertex3d>,
     index_buffer: IndexBuffer<u32>,
 }
 
-pub struct TexturedSceneObject {
-    vertex_buffer: VertexBuffer<Vertex>,
+pub struct TexturedSceneObject3d<T: Deref<Target = Texture2d>> {
+    vertex_buffer: VertexBuffer<Vertex3d>,
     index_buffer: IndexBuffer<u32>,
+    texture: T,
+}
+
+pub struct TexturelessSceneObject2d {
+    vertex_buffer: VertexBuffer<Vertex2d>,
+    index_buffer: IndexBuffer<u32>,
+}
+
+pub struct TexturedSceneObject2d<T: Deref<Target = Texture2d>> {
+    vertex_buffer: VertexBuffer<Vertex2d>,
+    index_buffer: IndexBuffer<u32>,
+    texture: T,
 }
 
 pub struct Graphics {
-    program: Program,
+    world_program: Program,
+    overlay_program: Program,
     draw_parameters: DrawParameters<'static>,
     screen_ratio: f64,
-    optimal_screen_ratio: f64,
+    optimal_window_size: LogicalSize,
     text_system: TextSystem,
     text_display: TextDisplay<Box<FontTexture>>,
     white_texture: Texture2d,
 }
 
 impl Graphics {
-    pub fn new(display: &Display, optimal_window_size: LogicalSize) -> Self {
-        // load shader sources and create program
-        let program = glium::Program::from_source(
+    pub fn new(display: &Display, mut optimal_window_size: LogicalSize) -> Self {
+        // load shader sources and create programs
+        let world_program = glium::Program::from_source(
             display,
-            VERTEX_SHADER_SOURCE,
-            FRAGMENT_SHADER_SOURCE,
-            Some(GEOMETRY_SHADER_SOURCE),
+            WORLD_VERTEX_SHADER_SOURCE,
+            WORLD_FRAGMENT_SHADER_SOURCE,
+            Some(WORLD_GEOMETRY_SHADER_SOURCE),
+        ).unwrap();
+
+        let overlay_program = glium::Program::from_source(
+            display,
+            OVERLAY_VERTEX_SHADER_SOURCE,
+            OVERLAY_FRAGMENT_SHADER_SOURCE,
+            Some(OVERLAY_GEOMETRY_SHADER_SOURCE),
         ).unwrap();
 
         // create draw parameters
@@ -79,10 +111,9 @@ impl Graphics {
         };
 
         // make sure that optimal_screen_ratio is valid
-        let mut optimal_screen_ratio = 1.0;
-        if optimal_window_size.width > 0.0 && optimal_window_size.height > 0.0 {
-            optimal_screen_ratio = optimal_window_size.width / optimal_window_size.height;
-        }
+        optimal_window_size.width = optimal_window_size.width.max(1.0);
+        optimal_window_size.height = optimal_window_size.height.max(1.0);
+        let optimal_screen_ratio = optimal_window_size.width / optimal_window_size.height;
 
         // load font and create text system
         let font_file = include_bytes!("../../font/DejaVuSansMono.ttf");
@@ -95,10 +126,11 @@ impl Graphics {
 
         // create the graphics
         Graphics {
-            program,
+            world_program,
+            overlay_program,
             draw_parameters,
             screen_ratio: optimal_screen_ratio, // TODO this is ugly
-            optimal_screen_ratio,
+            optimal_window_size,
             text_system,
             text_display,
             white_texture,
@@ -118,11 +150,12 @@ impl Graphics {
         // create the renderer
         let scene_renderer = SceneRenderer::new(
             &mut frame,
-            &self.program,
+            &self.world_program,
+            &self.overlay_program,
             &self.draw_parameters,
             &self.white_texture,
             self.screen_ratio,
-            self.optimal_screen_ratio,
+            self.optimal_window_size,
             &self.text_system,
             &mut self.text_display,
         );
@@ -136,11 +169,9 @@ impl Graphics {
 
     pub fn set_view_port_size(&mut self, size: LogicalSize) {
         // make sure the ratio is valid and save it
-        self.screen_ratio = if size.width <= 0.0 || size.height <= 0.0 {
-            self.optimal_screen_ratio
-        } else {
-            size.width / size.height
-        }
+        let w = size.width.max(1.0);
+        let h = size.height.max(1.0);
+        self.screen_ratio = w / h;
     }
 
     pub fn object_creator<'a>(&mut self, display: &'a Display) -> SceneObjectCreator<'a> {

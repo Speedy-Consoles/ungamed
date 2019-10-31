@@ -1,4 +1,5 @@
 use std::f64::consts::PI;
+use std::ops::Deref;
 
 use glium::Frame;
 use glium::Surface;
@@ -14,12 +15,16 @@ use glium_text::TextDisplay;
 use cgmath::PerspectiveFov;
 use cgmath::Ortho;
 use cgmath::Matrix4;
+use cgmath::Matrix3;
 use cgmath::Vector3;
 use cgmath::Rad;
 
 use super::color::Color;
-use super::TexturelessSceneObject;
-use super::TexturedSceneObject;
+use super::TexturelessSceneObject3d;
+use super::TexturedSceneObject3d;
+use super::TexturelessSceneObject2d;
+use super::TexturedSceneObject2d;
+use super::LogicalSize;
 
 pub const TEXT_NUM_LINES: u64 = 50; // Number of text lines that cover the whole vertical on the screen
 const TEXT_MARGIN: f64 = 0.2; // Line height relative space between lines and to the screen borders,
@@ -132,11 +137,12 @@ impl Default for SceneSettings {
 
 pub struct SceneRenderer<'a> {
     frame: &'a mut Frame,
-    program: &'a Program,
+    world_program: &'a Program,
+    overlay_program: &'a Program,
     draw_parameters: &'a DrawParameters<'a>,
     white_texture: &'a Texture2d,
     screen_ratio: f64,
-    optimal_screen_ratio: f64,
+    optimal_window_size: LogicalSize,
     text_system: &'a TextSystem,
     text_display: &'a mut TextDisplay<Box<FontTexture>>,
 }
@@ -144,21 +150,23 @@ pub struct SceneRenderer<'a> {
 impl<'a> SceneRenderer<'a> {
     pub(crate) fn new(
         frame: &'a mut Frame,
-        program: &'a Program,
+        world_program: &'a Program,
+        overlay_program: &'a Program,
         draw_parameters: &'a DrawParameters<'a>,
         white_texture: &'a Texture2d,
         screen_ratio: f64,
-        optimal_screen_ratio: f64,
+        optimal_window_size: LogicalSize,
         text_system: &'a TextSystem,
         text_display: &'a mut TextDisplay<Box<FontTexture>>,
     ) -> Self {
         SceneRenderer {
             frame,
-            program,
+            world_program,
+            overlay_program,
             draw_parameters,
             white_texture,
             screen_ratio,
-            optimal_screen_ratio,
+            optimal_window_size,
             text_system,
             text_display,
         }
@@ -174,17 +182,20 @@ impl<'a> SceneRenderer<'a> {
         );
         self.frame.clear_depth(1.0);
 
+        let optimal_screen_ratio = self.optimal_window_size.width / self.optimal_window_size.height;
+
         // move content to object renderer and return it
         SceneObjectRenderer {
             frame: self.frame,
-            program: self.program,
+            world_program: self.world_program,
+            overlay_program: self.overlay_program,
             draw_parameters: self.draw_parameters,
             white_texture: self.white_texture,
             screen_ratio: self.screen_ratio,
-            optimal_screen_ratio: self.optimal_screen_ratio,
+            optimal_window_size: self.optimal_window_size,
             world_to_screen_matrix: settings.camera.as_matrix(
                 self.screen_ratio,
-                self.optimal_screen_ratio,
+                optimal_screen_ratio,
             ),
             ambient_light_color: settings.ambient_light_color,
             directional_light_dir: settings.directional_light_dir,
@@ -197,11 +208,12 @@ impl<'a> SceneRenderer<'a> {
 
 pub struct SceneObjectRenderer<'a> {
     frame: &'a mut Frame,
-    program: &'a Program,
+    world_program: &'a Program,
+    overlay_program: &'a Program,
     draw_parameters: &'a DrawParameters<'a>,
     white_texture: &'a Texture2d,
     screen_ratio: f64,
-    optimal_screen_ratio: f64,
+    optimal_window_size: LogicalSize,
     world_to_screen_matrix: Matrix4<f32>,
     ambient_light_color: Color,
     directional_light_dir: Vector3<f32>,
@@ -213,7 +225,7 @@ pub struct SceneObjectRenderer<'a> {
 impl<'a> SceneObjectRenderer<'a> {
     pub fn draw_textureless(
         &mut self,
-        object: &TexturelessSceneObject,
+        object: &TexturelessSceneObject3d,
         color: Color,
         object_to_world_matrix: &Matrix4<f32>
     ) {
@@ -237,16 +249,15 @@ impl<'a> SceneObjectRenderer<'a> {
         self.frame.draw(
             &object.vertex_buffer,
             &object.index_buffer,
-            self.program,
+            self.world_program,
             &uniforms,
             self.draw_parameters,
         ).unwrap();
     }
 
-    pub fn draw_textured(
+    pub fn draw_textured<T: Deref<Target = Texture2d>>(
         &mut self,
-        object: &TexturedSceneObject,
-        texture: &Texture2d,
+        object: &TexturedSceneObject3d<T>,
         object_to_world_matrix: &Matrix4<f32>
     ) {
         let object_to_world_matrix_uniform: [[f32; 4]; 4] = (*object_to_world_matrix).into();
@@ -263,7 +274,102 @@ impl<'a> SceneObjectRenderer<'a> {
             directional_light_dir:       directional_light_dir_uniform,
             directional_light_color:     directional_light_color_uniform,
             color:                       color_uniform,
-            tex:                         texture,
+            tex:                         object.texture.deref(),
+        };
+
+        self.frame.draw(
+            &object.vertex_buffer,
+            &object.index_buffer,
+            self.world_program,
+            &uniforms,
+            self.draw_parameters,
+        ).unwrap();
+    }
+
+    pub fn start_overlay_rendering(self) -> OverlayRenderer<'a> {
+        self.frame.clear_depth(1.0);
+        OverlayRenderer::new(
+            self.screen_ratio,
+            self.optimal_window_size,
+            self.frame,
+            self.text_system,
+            self.text_display,
+            self.overlay_program,
+            self.draw_parameters,
+            self.white_texture,
+        )
+    }
+}
+
+pub struct OverlayRenderer<'a> {
+    frame: &'a mut Frame,
+    program: &'a Program,
+    draw_parameters: &'a DrawParameters<'a>,
+    white_texture: &'a Texture2d,
+    overlay_to_screen_matrix: Matrix3<f32>,
+    text_system: &'a TextSystem,
+    text_display: &'a mut TextDisplay<Box<FontTexture>>,
+}
+
+impl<'a> OverlayRenderer<'a> {
+    fn new(
+        screen_ratio: f64,
+        optimal_window_size: LogicalSize,
+        frame: &'a mut Frame,
+        text_system: &'a TextSystem,
+        text_display: &'a mut TextDisplay<Box<FontTexture>>,
+        program: &'a Program,
+        draw_parameters: &'a DrawParameters<'a>,
+        white_texture: &'a Texture2d,
+    ) -> OverlayRenderer<'a> {
+        let optimal_screen_ratio = optimal_window_size.width / optimal_window_size.height;
+        let ratio_ratio = screen_ratio / optimal_screen_ratio;
+        let x_scaling;
+        let y_scaling;
+        let x_offset;
+        let y_offset;
+        if ratio_ratio > 1.0 {
+            x_scaling = (2.0 / ratio_ratio / optimal_window_size.width) as f32;
+            y_scaling = (2.0 / optimal_window_size.height) as f32;
+            x_offset = (-1.0 / ratio_ratio) as f32;
+            y_offset = -1.0f32;
+        } else {
+            x_scaling = (2.0 / optimal_window_size.width) as f32;
+            y_scaling = (2.0 * ratio_ratio / optimal_window_size.height) as f32;
+            x_offset = -1.0f32;
+            y_offset = -ratio_ratio as f32;
+        }
+        let overlay_to_screen_matrix = Matrix3::new(
+            x_scaling, 0.0,       0.0,
+            0.0,       y_scaling, 0.0,
+            x_offset,  y_offset,  1.0f32,
+        );
+
+        OverlayRenderer {
+            frame,
+            overlay_to_screen_matrix,
+            text_system,
+            text_display,
+            program,
+            draw_parameters,
+            white_texture,
+        }
+    }
+
+    pub fn draw_textureless(
+        &mut self,
+        object: &TexturelessSceneObject2d,
+        color: Color,
+        object_to_overlay_matrix: &Matrix3<f32>
+    ) {
+        let object_to_screen_matrix = self.overlay_to_screen_matrix * object_to_overlay_matrix;
+        let object_to_screen_matrix_uniform: [[f32; 3]; 3] = object_to_screen_matrix.into();
+        // TODO The following uniforms only change per frame, not per draw. Can we optimize this?
+        let color_uniform: [f32; 3] = color.into();
+        let uniforms = uniform! {
+            object_to_screen_matrix:     object_to_screen_matrix_uniform,
+            color:                       color_uniform,
+            tex:                         self.white_texture,
         };
 
         self.frame.draw(
@@ -275,47 +381,30 @@ impl<'a> SceneObjectRenderer<'a> {
         ).unwrap();
     }
 
-    pub fn start_text_rendering(self) -> TextRenderer<'a> {
-        let ratio_ratio = self.screen_ratio / self.optimal_screen_ratio;
-        let x_scaling;
-        let y_scaling;
-        let x_offset;
-        let y_offset;
-        if ratio_ratio > 1.0 {
-            x_scaling = (TEXT_LINE_HEIGHT / self.screen_ratio) as f32;
-            y_scaling = TEXT_LINE_HEIGHT as f32;
-            x_offset = (-1.0 / ratio_ratio) as f32;
-            y_offset = -1.0;
-        } else {
-            x_scaling = (TEXT_LINE_HEIGHT / self.optimal_screen_ratio) as f32;
-            y_scaling = (TEXT_LINE_HEIGHT * ratio_ratio) as f32;
-            x_offset = -1.0;
-            y_offset = (-1.0 * ratio_ratio) as f32;
-        }
-        let text_area_to_screen_matrix = Matrix4::new(
-            x_scaling, 0.0,            0.0, 0.0,
-            0.0,       y_scaling,      0.0, 0.0,
-            0.0,       0.0,            1.0, 0.0,
-            x_offset,  y_offset, 0.0, 1.0f32,
-        );
+    pub fn draw_textured<T: Deref<Target = Texture2d>>(
+        &mut self,
+        object: &TexturedSceneObject2d<T>,
+        object_to_overlay_matrix: &Matrix3<f32>
+    ) {
+        let object_to_screen_matrix = self.overlay_to_screen_matrix * object_to_overlay_matrix;
+        let object_to_screen_matrix_uniform: [[f32; 3]; 3] = object_to_screen_matrix.into();
+        // TODO The following uniforms only change per frame, not per draw. Can we optimize this?
+        let color_uniform: [f32; 3] = [1.0, 1.0, 1.0];
+        let uniforms = uniform! {
+            object_to_screen_matrix:     object_to_screen_matrix_uniform,
+            color:                       color_uniform,
+            tex:                         object.texture.deref(),
+        };
 
-        TextRenderer {
-            frame: self.frame,
-            text_area_to_screen_matrix,
-            text_system: self.text_system,
-            text_display: self.text_display,
-        }
+        self.frame.draw(
+            &object.vertex_buffer,
+            &object.index_buffer,
+            self.program,
+            &uniforms,
+            self.draw_parameters,
+        ).unwrap();
     }
-}
 
-pub struct TextRenderer<'a> {
-    frame: &'a mut Frame,
-    text_area_to_screen_matrix: Matrix4<f32>,
-    text_system: &'a TextSystem,
-    text_display: &'a mut TextDisplay<Box<FontTexture>>,
-}
-
-impl<'a> TextRenderer<'a> {
     pub fn draw_text(&mut self, line_number: u64, text: &str) {
         assert!(
             line_number < TEXT_NUM_LINES,
@@ -329,11 +418,42 @@ impl<'a> TextRenderer<'a> {
         let translation = Vector3::new(x_offset as f32, y_offset as f32, 0.0);
         let translation_matrix = Matrix4::from_translation(translation);
 
+        // TODO
+        /*let ratio_ratio = screen_ratio / optimal_screen_ratio;
+        let x_scaling;
+        let y_scaling;
+        let x_offset;
+        let y_offset;
+        if ratio_ratio > 1.0 {
+            x_scaling = (TEXT_LINE_HEIGHT / screen_ratio) as f32;
+            y_scaling = TEXT_LINE_HEIGHT as f32;
+            x_offset = (-1.0 / ratio_ratio) as f32;
+            y_offset = -1.0;
+        } else {
+            x_scaling = (TEXT_LINE_HEIGHT / optimal_screen_ratio) as f32;
+            y_scaling = (TEXT_LINE_HEIGHT * ratio_ratio) as f32;
+            x_offset = -1.0;
+            y_offset = (-1.0 * ratio_ratio) as f32;
+        }
+        let text_area_to_screen_matrix = Matrix4::new(
+            x_scaling, 0.0, 0.0, 0.0,
+            0.0, y_scaling, 0.0, 0.0,
+            0.0, 0.0, 1.0, 0.0,
+            x_offset, y_offset, 0.0, 1.0f32,
+        );*/
+
+        let text_area_to_screen_matrix = Matrix4::new(
+            1.0, 0.0, 0.0, 0.0,
+            0.0, 1.0, 0.0, 0.0,
+            0.0, 0.0, 1.0, 0.0,
+            0.0, 0.0, 0.0, 1.0f32,
+        ); // TODO
+
         glium_text::draw(
             self.text_display,
             self.text_system,
             self.frame,
-            self.text_area_to_screen_matrix * translation_matrix,
+            text_area_to_screen_matrix * translation_matrix,
             (1.0, 1.0, 1.0, 1.0),
         );
     }
