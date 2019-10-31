@@ -607,14 +607,15 @@ mod tests {
     use crate::Color;
     use crate::SceneObjectCreator;
     use crate::SceneRenderer;
-    use crate::TexturelessSceneObject3d;
-    use crate::TexturedSceneObject3d;
     use crate::TexturelessSceneObject2d;
     use crate::TexturedSceneObject2d;
-    use crate::cgmath::Vector3;
+    use crate::TexturelessSceneObject3d;
+    use crate::TexturedSceneObject3d;
     use crate::cgmath::Vector2;
-    use crate::cgmath::Matrix4;
+    use crate::cgmath::Vector3;
+    use crate::cgmath::Matrix2;
     use crate::cgmath::Matrix3;
+    use crate::cgmath::Matrix4;
     use crate::cgmath::Rad;
     use crate::ValueTargetTrait;
     use crate::Texture2d;
@@ -884,26 +885,27 @@ mod tests {
                 object_renderer.draw_textureless(&self.textureless_cube, Color::blue(), &z_cube);
 
                 overlay_renderer = object_renderer.start_overlay_rendering();
+                let rotation: Matrix3<f32> = Matrix2::from_angle(Rad(game.cube_rotation)).into();
                 let square1 = Matrix3::new(
                     4.0, 0.0, 0.0,
                     0.0, 4.0, 0.0,
                     5.0, 5.0, 1.0f32,
-                );
+                ) * rotation;
                 let square2 = Matrix3::new(
                       4.0, 0.0, 0.0,
                       0.0, 4.0, 0.0,
                     155.0, 5.0, 1.0f32,
-                );
+                ) * rotation;
                 let square3 = Matrix3::new(
                     4.0,  0.0, 0.0,
                     0.0,  4.0, 0.0,
                     5.0, 85.0, 1.0f32,
-                );
+                ) * rotation;
                 let square4 = Matrix3::new(
                       4.0,  0.0, 0.0,
                       0.0,  4.0, 0.0,
                     155.0, 85.0, 1.0f32,
-                );
+                ) * rotation;
                 overlay_renderer.draw_textureless(&self.textureless_square, Color::black(), &square1);
                 overlay_renderer.draw_textured(&self.textured_square, &square2);
                 overlay_renderer.draw_textured(&self.textured_square, &square3);
