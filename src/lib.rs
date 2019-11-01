@@ -42,6 +42,7 @@ pub use self::graphics::render::SceneObjectRenderer;
 pub use self::graphics::render::Projection;
 pub use self::graphics::render::Camera;
 pub use self::graphics::render::TEXT_NUM_LINES;
+pub use self::graphics::render::OverlayAlignment;
 
 #[derive(Debug)]
 pub enum Event<FireTarget, SwitchTarget, ValueTarget> {
@@ -620,6 +621,7 @@ mod tests {
     use crate::ValueTargetTrait;
     use crate::Texture2d;
     use crate::TEXT_NUM_LINES;
+    use crate::OverlayAlignment;
 
     const NUM_TICKS: u64 = 131;
     //const TICK_RATE: u32 = 50;
@@ -658,11 +660,11 @@ mod tests {
         fn update(&mut self) -> GameStatus {
             self.cube_rotation += 0.05;
             self.num_updates += 1;
-            if self.num_updates >= NUM_TICKS {
-                GameStatus::Ended
-            } else {
+            //if self.num_updates >= NUM_TICKS {
+            //    GameStatus::Ended
+            //} else {
                 GameStatus::Running
-            }
+            //}
         }
     }
 
@@ -693,9 +695,9 @@ mod tests {
             binds: &mut Vec<ControlBind<FireTarget, SwitchTarget, ValueTarget>>,
         ) -> Self {
 
-            binds.push(ControlBind::Fire(FireTrigger::Holdable(HoldableTrigger::Button(1)), FireTarget::StartGame));
-            binds.push(ControlBind::Fire(FireTrigger::Holdable(HoldableTrigger::Button(3)), FireTarget::EndGame));
-            binds.push(ControlBind::Fire(FireTrigger::Holdable(HoldableTrigger::KeyCode(VirtualKeyCode::Space)), FireTarget::ToggleGamePause));
+            binds.push(ControlBind::Fire(FireTrigger::Holdable(HoldableTrigger::KeyCode(VirtualKeyCode::Return)), FireTarget::StartGame));
+            binds.push(ControlBind::Fire(FireTrigger::Holdable(HoldableTrigger::KeyCode(VirtualKeyCode::Back)), FireTarget::EndGame));
+            binds.push(ControlBind::Fire(FireTrigger::Holdable(HoldableTrigger::KeyCode(VirtualKeyCode::P)), FireTarget::ToggleGamePause));
             binds.push(ControlBind::Fire(FireTrigger::Holdable(HoldableTrigger::KeyCode(VirtualKeyCode::F)), FireTarget::FreeCursor));
             binds.push(ControlBind::Fire(FireTrigger::Holdable(HoldableTrigger::KeyCode(VirtualKeyCode::C)), FireTarget::CaptureCursor));
             binds.push(ControlBind::Fire(FireTrigger::Holdable(HoldableTrigger::KeyCode(VirtualKeyCode::H)), FireTarget::HideCursor));
@@ -906,10 +908,28 @@ mod tests {
                       0.0,  4.0, 0.0,
                     155.0, 85.0, 1.0f32,
                 ) * rotation;
-                overlay_renderer.draw_textureless(&self.textureless_square, Color::black(), &square1);
-                overlay_renderer.draw_textured(&self.textured_square, &square2);
-                overlay_renderer.draw_textured(&self.textured_square, &square3);
-                overlay_renderer.draw_textureless(&self.textureless_square, Color::black(), &square4);
+                overlay_renderer.draw_textureless(
+                    &self.textureless_square,
+                    Color::black(),
+                    &square1,
+                    OverlayAlignment::BottomLeft,
+                );
+                overlay_renderer.draw_textured(
+                    &self.textured_square,
+                    &square2,
+                    OverlayAlignment::BottomRight
+                );
+                overlay_renderer.draw_textured(
+                    &self.textured_square,
+                    &square3,
+                    OverlayAlignment::TopLeft
+                );
+                overlay_renderer.draw_textureless(
+                    &self.textureless_square,
+                    Color::black(),
+                    &square4,
+                    OverlayAlignment::TopRight,
+                );
             } else {
                 overlay_renderer = object_renderer.start_overlay_rendering();
             }

@@ -7,6 +7,8 @@ use glium::DrawParameters;
 use glium::Program;
 use glium::uniform;
 use glium::texture::texture2d::Texture2d;
+use glium::vertex::VertexBuffer;
+use glium::index::IndexBuffer;
 
 use glium_text::TextSystem;
 use glium_text::FontTexture;
@@ -17,6 +19,7 @@ use cgmath::Ortho;
 use cgmath::Matrix4;
 use cgmath::Matrix3;
 use cgmath::Vector3;
+use cgmath::Vector2;
 use cgmath::Rad;
 
 use super::color::Color;
@@ -25,6 +28,8 @@ use super::TexturedSceneObject3d;
 use super::TexturelessSceneObject2d;
 use super::TexturedSceneObject2d;
 use super::LogicalSize;
+use super::Vertex3d;
+use super::Vertex2d;
 
 pub const TEXT_NUM_LINES: u64 = 50; // Number of text lines that cover the whole vertical on the screen
 const TEXT_MARGIN: f64 = 0.2; // Line height relative space between lines and to the screen borders,
@@ -101,6 +106,35 @@ pub struct Camera {
 impl Camera {
     pub fn as_matrix(&self, screen_ratio: f64, optimal_screen_ratio: f64) -> Matrix4<f32> {
         self.projection.as_matrix(screen_ratio, optimal_screen_ratio) * self.translation_rotation
+    }
+}
+
+pub enum OverlayAlignment {
+    TopLeft,
+    Top,
+    TopRight,
+    Right,
+    BottomRight,
+    Bottom,
+    BottomLeft,
+    Left,
+    Center,
+}
+
+impl OverlayAlignment {
+    fn offset_factor(&self) -> Vector2<f64> {
+        use OverlayAlignment::*;
+        match self {
+            TopLeft     => Vector2::new(0.0, 2.0),
+            Top         => Vector2::new(1.0, 2.0),
+            TopRight    => Vector2::new(2.0, 2.0),
+            Right       => Vector2::new(2.0, 1.0),
+            BottomRight => Vector2::new(2.0, 0.0),
+            Bottom      => Vector2::new(1.0, 0.0),
+            BottomLeft  => Vector2::new(0.0, 0.0),
+            Left        => Vector2::new(0.0, 1.0),
+            Center      => Vector2::new(1.0, 1.0),
+        }
     }
 }
 
@@ -229,30 +263,13 @@ impl<'a> SceneObjectRenderer<'a> {
         color: Color,
         object_to_world_matrix: &Matrix4<f32>
     ) {
-        let object_to_world_matrix_uniform: [[f32; 4]; 4] = (*object_to_world_matrix).into();
-        // TODO The following uniforms only change per frame, not per draw. Can we optimize this?
-        let world_to_screen_matrix_uniform: [[f32; 4]; 4] = self.world_to_screen_matrix.into();
-        let ambient_light_color_uniform: [f32; 3] = self.ambient_light_color.into();
-        let directional_light_dir_uniform: [f32; 3] = self.directional_light_dir.into();
-        let directional_light_color_uniform: [f32; 3] = self.directional_light_color.into();
-        let color_uniform: [f32; 3] = color.into();
-        let uniforms = uniform! {
-            object_to_world_matrix:      object_to_world_matrix_uniform,
-            world_to_screen_matrix:      world_to_screen_matrix_uniform,
-            ambient_light_color:         ambient_light_color_uniform,
-            directional_light_dir:       directional_light_dir_uniform,
-            directional_light_color:     directional_light_color_uniform,
-            color:                       color_uniform,
-            tex:                         self.white_texture,
-        };
-
-        self.frame.draw(
+        self.draw_internal(
             &object.vertex_buffer,
             &object.index_buffer,
-            self.world_program,
-            &uniforms,
-            self.draw_parameters,
-        ).unwrap();
+            self.white_texture,
+            color,
+            object_to_world_matrix,
+        );
     }
 
     pub fn draw_textured<T: Deref<Target = Texture2d>>(
@@ -260,30 +277,13 @@ impl<'a> SceneObjectRenderer<'a> {
         object: &TexturedSceneObject3d<T>,
         object_to_world_matrix: &Matrix4<f32>
     ) {
-        let object_to_world_matrix_uniform: [[f32; 4]; 4] = (*object_to_world_matrix).into();
-        // TODO The following uniforms only change per frame, not per draw. Can we optimize this?
-        let world_to_screen_matrix_uniform: [[f32; 4]; 4] = self.world_to_screen_matrix.into();
-        let ambient_light_color_uniform: [f32; 3] = self.ambient_light_color.into();
-        let directional_light_dir_uniform: [f32; 3] = self.directional_light_dir.into();
-        let directional_light_color_uniform: [f32; 3] = self.directional_light_color.into();
-        let color_uniform: [f32; 3] = [1.0, 1.0, 1.0];
-        let uniforms = uniform! {
-            object_to_world_matrix:      object_to_world_matrix_uniform,
-            world_to_screen_matrix:      world_to_screen_matrix_uniform,
-            ambient_light_color:         ambient_light_color_uniform,
-            directional_light_dir:       directional_light_dir_uniform,
-            directional_light_color:     directional_light_color_uniform,
-            color:                       color_uniform,
-            tex:                         object.texture.deref(),
-        };
-
-        self.frame.draw(
+        self.draw_internal(
             &object.vertex_buffer,
             &object.index_buffer,
-            self.world_program,
-            &uniforms,
-            self.draw_parameters,
-        ).unwrap();
+            object.texture.deref(),
+            Color::new(1.0, 1.0, 1.0),
+            object_to_world_matrix,
+        );
     }
 
     pub fn start_overlay_rendering(self) -> OverlayRenderer<'a> {
@@ -299,6 +299,40 @@ impl<'a> SceneObjectRenderer<'a> {
             self.white_texture,
         )
     }
+
+    fn draw_internal(
+        &mut self,
+        vertex_buffer: &VertexBuffer<Vertex3d>,
+        index_buffer: &IndexBuffer<u32>,
+        texture: &Texture2d,
+        color: Color,
+        object_to_world_matrix: &Matrix4<f32>,
+    ) {
+        let object_to_world_matrix_uniform: [[f32; 4]; 4] = (*object_to_world_matrix).into();
+        // TODO The following uniforms only change per frame, not per draw. Can we optimize this?
+        let world_to_screen_matrix_uniform: [[f32; 4]; 4] = self.world_to_screen_matrix.into();
+        let ambient_light_color_uniform: [f32; 3] = self.ambient_light_color.into();
+        let directional_light_dir_uniform: [f32; 3] = self.directional_light_dir.into();
+        let directional_light_color_uniform: [f32; 3] = self.directional_light_color.into();
+        let color_uniform: [f32; 3] = color.into();
+        let uniforms = uniform! {
+            object_to_world_matrix:      object_to_world_matrix_uniform,
+            world_to_screen_matrix:      world_to_screen_matrix_uniform,
+            ambient_light_color:         ambient_light_color_uniform,
+            directional_light_dir:       directional_light_dir_uniform,
+            directional_light_color:     directional_light_color_uniform,
+            color:                       color_uniform,
+            tex:                         texture,
+        };
+
+        self.frame.draw(
+            vertex_buffer,
+            index_buffer,
+            self.world_program,
+            &uniforms,
+            self.draw_parameters,
+        ).unwrap();
+    }
 }
 
 pub struct OverlayRenderer<'a> {
@@ -306,7 +340,8 @@ pub struct OverlayRenderer<'a> {
     program: &'a Program,
     draw_parameters: &'a DrawParameters<'a>,
     white_texture: &'a Texture2d,
-    overlay_to_screen_matrix: Matrix3<f32>,
+    scaling: Vector2<f64>,
+    offset_base: Vector2<f64>,
     text_system: &'a TextSystem,
     text_display: &'a mut TextDisplay<Box<FontTexture>>,
 }
@@ -322,32 +357,27 @@ impl<'a> OverlayRenderer<'a> {
         draw_parameters: &'a DrawParameters<'a>,
         white_texture: &'a Texture2d,
     ) -> OverlayRenderer<'a> {
-        let optimal_screen_ratio = optimal_window_size.width / optimal_window_size.height;
-        let ratio_ratio = screen_ratio / optimal_screen_ratio;
-        let x_scaling;
-        let y_scaling;
-        let x_offset;
-        let y_offset;
+        let ratio_ratio = screen_ratio / optimal_window_size.width * optimal_window_size.height;
+        let scaling;
+        let offset_base;
         if ratio_ratio > 1.0 {
-            x_scaling = (2.0 / ratio_ratio / optimal_window_size.width) as f32;
-            y_scaling = (2.0 / optimal_window_size.height) as f32;
-            x_offset = (-1.0 / ratio_ratio) as f32;
-            y_offset = -1.0f32;
+            scaling = Vector2::new(
+                2.0 / ratio_ratio / optimal_window_size.width,
+                2.0 / optimal_window_size.height,
+            );
+            offset_base = Vector2::new(1.0 - 1.0 / ratio_ratio, 0.0);
         } else {
-            x_scaling = (2.0 / optimal_window_size.width) as f32;
-            y_scaling = (2.0 * ratio_ratio / optimal_window_size.height) as f32;
-            x_offset = -1.0f32;
-            y_offset = -ratio_ratio as f32;
+            scaling = Vector2::new(
+                2.0 / optimal_window_size.width,
+                2.0 * ratio_ratio / optimal_window_size.height,
+            );
+            offset_base = Vector2::new(0.0, 1.0 - ratio_ratio);
         }
-        let overlay_to_screen_matrix = Matrix3::new(
-            x_scaling, 0.0,       0.0,
-            0.0,       y_scaling, 0.0,
-            x_offset,  y_offset,  1.0f32,
-        );
 
         OverlayRenderer {
             frame,
-            overlay_to_screen_matrix,
+            scaling,
+            offset_base,
             text_system,
             text_display,
             program,
@@ -360,49 +390,33 @@ impl<'a> OverlayRenderer<'a> {
         &mut self,
         object: &TexturelessSceneObject2d,
         color: Color,
-        object_to_overlay_matrix: &Matrix3<f32>
+        object_to_overlay_matrix: &Matrix3<f32>,
+        alignment: OverlayAlignment,
     ) {
-        let object_to_screen_matrix = self.overlay_to_screen_matrix * object_to_overlay_matrix;
-        let object_to_screen_matrix_uniform: [[f32; 3]; 3] = object_to_screen_matrix.into();
-        // TODO The following uniforms only change per frame, not per draw. Can we optimize this?
-        let color_uniform: [f32; 3] = color.into();
-        let uniforms = uniform! {
-            object_to_screen_matrix:     object_to_screen_matrix_uniform,
-            color:                       color_uniform,
-            tex:                         self.white_texture,
-        };
-
-        self.frame.draw(
+        self.draw_internal(
             &object.vertex_buffer,
             &object.index_buffer,
-            self.program,
-            &uniforms,
-            self.draw_parameters,
-        ).unwrap();
+            self.white_texture,
+            color,
+            object_to_overlay_matrix,
+            alignment,
+        );
     }
 
     pub fn draw_textured<T: Deref<Target = Texture2d>>(
         &mut self,
         object: &TexturedSceneObject2d<T>,
-        object_to_overlay_matrix: &Matrix3<f32>
+        object_to_overlay_matrix: &Matrix3<f32>,
+        alignment: OverlayAlignment,
     ) {
-        let object_to_screen_matrix = self.overlay_to_screen_matrix * object_to_overlay_matrix;
-        let object_to_screen_matrix_uniform: [[f32; 3]; 3] = object_to_screen_matrix.into();
-        // TODO The following uniforms only change per frame, not per draw. Can we optimize this?
-        let color_uniform: [f32; 3] = [1.0, 1.0, 1.0];
-        let uniforms = uniform! {
-            object_to_screen_matrix:     object_to_screen_matrix_uniform,
-            color:                       color_uniform,
-            tex:                         object.texture.deref(),
-        };
-
-        self.frame.draw(
+        self.draw_internal(
             &object.vertex_buffer,
             &object.index_buffer,
-            self.program,
-            &uniforms,
-            self.draw_parameters,
-        ).unwrap();
+            object.texture.deref(),
+            Color::new(1.0, 1.0, 1.0),
+            object_to_overlay_matrix,
+            alignment,
+        );
     }
 
     pub fn draw_text(&mut self, line_number: u64, text: &str) {
@@ -456,6 +470,44 @@ impl<'a> OverlayRenderer<'a> {
             text_area_to_screen_matrix * translation_matrix,
             (1.0, 1.0, 1.0, 1.0),
         );
+    }
+
+    fn draw_internal(
+        &mut self,
+        vertex_buffer: &VertexBuffer<Vertex2d>,
+        index_buffer: &IndexBuffer<u32>,
+        texture: &Texture2d,
+        color: Color,
+        object_to_overlay_matrix: &Matrix3<f32>,
+        alignment: OverlayAlignment,
+    ) {
+        let offset_factor = alignment.offset_factor();
+        let x_offset = (self.offset_base.x * offset_factor.x - 1.0) as f32;
+        let y_offset = (self.offset_base.y * offset_factor.y - 1.0) as f32;
+        let x_scaling = self.scaling.x as f32;
+        let y_scaling = self.scaling.y as f32;
+        let overlay_to_screen_matrix = Matrix3::new(
+            x_scaling, 0.0,       0.0,
+            0.0,       y_scaling, 0.0,
+            x_offset,  y_offset,  1.0,
+        );
+        let object_to_screen_matrix = overlay_to_screen_matrix * object_to_overlay_matrix;
+        let object_to_screen_matrix_uniform: [[f32; 3]; 3] = object_to_screen_matrix.into();
+        // TODO The following uniforms only change per frame, not per draw. Can we optimize this?
+        let color_uniform: [f32; 3] = color.into();
+        let uniforms = uniform! {
+            object_to_screen_matrix:     object_to_screen_matrix_uniform,
+            color:                       color_uniform,
+            tex:                         texture,
+        };
+
+        self.frame.draw(
+            vertex_buffer,
+            index_buffer,
+            self.program,
+            &uniforms,
+            self.draw_parameters,
+        ).unwrap();
     }
 }
 
