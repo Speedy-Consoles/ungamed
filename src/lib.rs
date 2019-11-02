@@ -673,6 +673,7 @@ mod tests {
         textureless_cube: TexturelessSceneObject3d,
         textured_square: TexturedSceneObject2d<Rc<Texture2d>>,
         textureless_square: TexturelessSceneObject2d,
+        rectangle: TexturelessSceneObject2d,
         num_renders: Cell<u64>,
     }
 
@@ -786,11 +787,28 @@ mod tests {
                 &square_indices
             );
 
+            let rectangle_vertices = [
+                Vector2::new(0.0, 0.0),
+                Vector2::new(1.0, 0.0),
+                Vector2::new(0.0, 1.0),
+                Vector2::new(1.0, 1.0),
+            ];
+            let rectangle_indices = [
+                0, 1, 3,
+                0, 3, 2,
+            ];
+
+            let rectangle = scene_object_creator.create_textureless2d(
+                &rectangle_vertices,
+                &rectangle_indices,
+            );
+
             TestApplication {
                 textured_cube,
                 textureless_cube,
                 textured_square,
                 textureless_square,
+                rectangle,
                 num_renders: Cell::new(0),
             }
         }
@@ -930,6 +948,39 @@ mod tests {
                     &square4,
                     OverlayAlignment::TopRight,
                 );
+
+                let alignments = [
+                    OverlayAlignment::BottomLeft,
+                    OverlayAlignment::Bottom,
+                    OverlayAlignment::BottomRight,
+                    OverlayAlignment::Left,
+                    OverlayAlignment::Center,
+                    OverlayAlignment::Right,
+                    OverlayAlignment::TopLeft,
+                    OverlayAlignment::Top,
+                    OverlayAlignment::TopRight,
+                ];
+                let widths = [40.0, 80.0, 40.0];
+                let heights = [25.0, 40.0, 25.0];
+                for i in 0..9 {
+                    let ix = i % 3;
+                    let iy = i / 3;
+                    let width = widths[ix];
+                    let height = heights[iy];
+                    let x = widths[..ix].iter().sum();
+                    let y = heights[..iy].iter().sum();
+                    let mat = Matrix3::new(
+                        width,  0.0,    0.0,
+                        0.0,    height, 0.0,
+                        x,      y,      1.0,
+                    );
+                    overlay_renderer.draw_textureless(
+                        &self.rectangle,
+                        Color::blue(),
+                        &mat,
+                        alignments[i],
+                    );
+                }
             } else {
                 overlay_renderer = object_renderer.start_overlay_rendering();
             }

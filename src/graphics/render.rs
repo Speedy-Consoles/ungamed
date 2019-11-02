@@ -109,6 +109,7 @@ impl Camera {
     }
 }
 
+#[derive(Copy, Clone)]
 pub enum OverlayAlignment {
     TopLeft,
     Top,
