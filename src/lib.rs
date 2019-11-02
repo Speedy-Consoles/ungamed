@@ -446,6 +446,11 @@ impl<A: Application> Engine<A> {
                             self.emit_event(Event::CloseRequested);
                         },
                         WindowEvent::Focused(focused) => {
+                            if focused {
+                                self.controls.resume()
+                            } else {
+                                self.controls.pause()
+                            }
                             self.emit_event(Event::WindowFocusChanged(focused));
                         },
                         WindowEvent::Moved(_) => (),
